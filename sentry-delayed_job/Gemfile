@@ -1,0 +1,31 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+git_source(:github) { |name| "https://github.com/#{name}.git" }
+
+eval_gemfile "../Gemfile.dev"
+
+# Specify your gem's dependencies in sentry-ruby.gemspec
+gemspec
+gem "sentry-ruby", path: "../sentry-ruby"
+gem "sentry-rails", path: "../sentry-rails"
+
+gem "delayed_job"
+gem "delayed_job_active_record"
+
+gem "rails", "> 5.2.0"
+
+platform :jruby do
+  gem "activerecord-jdbcmysql-adapter"
+  gem "jdbc-sqlite3"
+end
+
+ruby_version = Gem::Version.new(RUBY_VERSION)
+
+if ruby_version < Gem::Version.new("3.0.0")
+  gem "sqlite3", "~> 1.6.0", platform: :ruby
+elsif ruby_version >= Gem::Version.new("3.0.0") && ruby_version < Gem::Version.new("3.1.0")
+  gem "sqlite3", "~> 1.7.0", platform: :ruby
+elsif ruby_version >= Gem::Version.new("3.1.0")
+  gem "sqlite3", "~> 2.2", platform: :ruby
+end

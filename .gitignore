@@ -1,11 +1,27 @@
-/.bundle/
-/.yardoc
-/_yardoc/
-/coverage/
-/doc/
-/pkg/
-/spec/reports/
-/tmp/
+coverage
+pkg
+tmp
+ruby/
+log/
+.bundle
+*.gem
+gemfiles/*.lock
+Gemfile.lock
+.coveralls.yml
+.ruby-version
+.ruby-gemset
+.idea
+*.rdb
+.rgignore
+.claude
+
+node_modules
+.vite
+
+.devcontainer/.env
+vendor/gems
+sentry-rails/Gemfile-*.lock
+mise.toml
 
 # rspec failure tracking
 .rspec_status

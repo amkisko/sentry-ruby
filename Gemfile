@@ -1,34 +1,15 @@
 # frozen_string_literal: true
 
 source "https://rubygems.org"
-git_source(:github) { |name| "https://github.com/#{name}.git" }
 
-eval_gemfile "../Gemfile.dev"
+eval_gemfile "Gemfile.dev"
 
-gem "sentry-ruby", path: "./"
+group :e2e do
+  gem "capybara"
+  gem "selenium-webdriver"
+end
 
-rack_version = ENV["RACK_VERSION"]
-rack_version = "3.0.0" if rack_version.nil?
-gem "rack", "~> #{Gem::Version.new(rack_version)}" unless rack_version == "0"
-
-redis_rb_version = ENV.fetch("REDIS_RB_VERSION", "5.0")
-gem "redis", "~> #{redis_rb_version}"
-
-gem "puma"
-
-gem "timecop"
-gem "stackprof" unless RUBY_PLATFORM == "java"
-gem "vernier", platforms: :ruby if RUBY_VERSION >= "3.2.1"
-
-gem "graphql", ">= 2.2.6"
-
-gem "benchmark-ips"
-gem "benchmark_driver"
-gem "benchmark-ipsa"
-gem "benchmark-memory"
-
-gem "yard"
-gem "webrick"
-gem "faraday"
-gem "excon"
-gem "webmock"
+group :sentry do
+  gem "sentry-ruby", path: "sentry-ruby"
+  gem "sentry-rails", path: "sentry-rails"
+end

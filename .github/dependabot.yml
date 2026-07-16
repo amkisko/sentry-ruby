@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: "bundler"
+    schedule:
+      interval: "daily"
+    allow:
+      - dependency-type: "direct"
+    directories:
+      - "sentry-delayed_job"
+      - "sentry-opentelemetry"
+      - "sentry-rails"
+      - "sentry-ruby"
+      - "sentry-resque"
+      - "sentry-sidekiq"

@@ -1,174 +1,55 @@
 # frozen_string_literal: true
 
-require "bundler/setup"
-begin
-  require "debug/prelude"
-rescue LoadError
-end
-require "timecop"
-require "simplecov"
-require "rspec/retry"
-require "redis"
-require "stackprof" unless RUBY_PLATFORM == "java"
-require "vernier" unless RUBY_PLATFORM == "java" || RUBY_VERSION < "3.2"
-
-SimpleCov.start do
-  project_name "sentry-ruby"
-  root File.join(__FILE__, "../../../")
-  coverage_dir File.join(__FILE__, "../../coverage")
-end
-
-REDIS_HOST = ENV.fetch("REDIS_HOST", "127.0.0.1")
-
-if ENV["CI"]
-  require 'simplecov-cobertura'
-  SimpleCov.formatter = SimpleCov::Formatter::CoberturaFormatter
-end
-
 require "sentry-ruby"
 require "sentry/test_helper"
 
-require "webmock/rspec"
-require_relative "support/profiler"
-require_relative "support/stacktrace_test_fixture"
+require "selenium-webdriver"
+
+require "capybara"
+require "capybara/rspec"
+require "debug"
+
+require_relative "support/test_helper"
+
+Capybara.configure do |config|
+  config.default_driver = :selenium_headless_chrome
+  config.javascript_driver = :selenium_headless_chrome
+  config.app_host = ENV.fetch("SENTRY_E2E_SVELTE_APP_URL", "http://localhost:4001")
+end
+
+Capybara.register_driver :selenium_headless_chrome do |app|
+  options = Selenium::WebDriver::Chrome::Options.new
+
+  options.add_argument("--headless")
+  options.add_argument("--disable-dev-shm-usage")
+  options.add_argument("--no-sandbox")
+  options.add_argument("--disable-gpu")
+  options.add_argument("--temp-profile")
+  options.binary = "/usr/bin/chromium" if File.exist?("/usr/bin/chromium")
+
+  Capybara::Selenium::Driver.new(app, browser: :chrome, options: options)
+end
 
 RSpec.configure do |config|
-  # Enable flags like --only-failures and --next-failure
-  config.example_status_persistence_file_path = ".rspec_status"
+  config.include(Capybara::DSL, type: :e2e)
+  config.include(Test::Helper)
 
-  # Disable RSpec exposing methods globally on `Module` and `main`
-  config.disable_monkey_patching!
-
-  config.include(Sentry::TestHelper)
-
-  config.expect_with :rspec do |c|
-    c.syntax = :expect
-  end
-
-  config.before :each do
-    # Make sure we reset the env in case something leaks in
-    ENV.delete('SENTRY_DSN')
-    ENV.delete('SENTRY_CURRENT_ENV')
-    ENV.delete('SENTRY_ENVIRONMENT')
-    ENV.delete('SENTRY_RELEASE')
-    ENV.delete('RAILS_ENV')
-    ENV.delete('RACK_ENV')
-  end
-
-  config.before(:each, when: true) do |example|
-    guards =
-      case value = example.metadata[:when]
-      when Symbol then [value]
-      when Array then value
-      when Hash then value.map { |k, v| [k, v].flatten }
-      else
-        raise ArgumentError, "Invalid `when` metadata: #{value.inspect}"
-      end
-
-    skip_examples = guards.any? do |meth, *args|
-      !TestHelpers.public_send(meth, *args)
+  config.before(:suite) do
+    Test::Helper.perform_basic_setup do |config|
+      config.transport.transport_class = Sentry::DebugTransport
+      config.enable_logs = true
+      config.structured_logging.logger_class = Sentry::DebugStructuredLogger
+      config.structured_logging.file_path = Test::Helper.debug_log_path.join("sentry_e2e_tests.log")
     end
 
-    skip("Skipping because one or more guards `#{guards.inspect}` returned false") if skip_examples
-  end
-
-  config.around(:each, webmock: false) do |example|
-    WebMock.disable!
-    example.run
-    WebMock.enable!
+    Test::Helper.clear_logged_events
   end
 
   config.after(:each) do
-    if Sentry.initialized?
-      transport = Sentry.get_current_client&.transport
-
-      if transport.is_a?(Sentry::DebugTransport)
-        transport.clear
-      end
-    end
-
-    reset_sentry_globals!
+    Test::Helper.clear_logged_events
   end
 
-  RSpec::Matchers.define :have_recorded_lost_event do |reason, data_category, num: 1|
-    match do |transport|
-      expect(transport.discarded_events[[reason, data_category]]).to eq(num)
-    end
-  end
-end
-
-module TestHelpers
-  def self.stack_prof_installed?
-    defined?(StackProf)
-  end
-
-  def self.vernier_installed?
-    require "sentry/vernier/profiler"
-    defined?(::Vernier)
-  end
-
-  def self.rack_available?
-    defined?(Rack)
-  end
-
-  def self.ruby_version?(op, version)
-    RUBY_VERSION.public_send(op, version)
-  end
-
-  def self.ruby_engine?(engine)
-    RUBY_ENGINE == engine
-  end
-end
-
-def fixtures_root
-  @fixtures_root ||= Pathname(__dir__).join("fixtures")
-end
-
-def fixture_path(name)
-  fixtures_root.join(name).realpath
-end
-
-def build_exception_with_cause(cause = "exception a")
-  begin
-    raise cause
-  rescue
-    raise "exception b"
-  end
-rescue RuntimeError => e
-  e
-end
-
-def build_exception_with_two_causes
-  begin
-    begin
-      raise "exception a"
-    rescue
-      raise "exception b"
-    end
-  rescue
-    raise "exception c"
-  end
-rescue RuntimeError => e
-  e
-end
-
-def build_exception_with_recursive_cause
-  backtrace = []
-
-  exception = double("Exception")
-  allow(exception).to receive(:cause).and_return(exception)
-  allow(exception).to receive(:message).and_return("example")
-  allow(exception).to receive(:backtrace).and_return(backtrace)
-  exception
-end
-
-def perform_basic_setup
-  Sentry.init do |config|
-    config.sdk_logger = Logger.new(nil)
-    config.dsn = Sentry::TestHelper::DUMMY_DSN
-    config.transport.transport_class = Sentry::DummyTransport
-    # so the events will be sent synchronously for testing
-    config.background_worker_threads = 0
-    yield(config) if block_given?
+  config.after(:each) do
+    Test::Helper.clear_logs
   end
 end
