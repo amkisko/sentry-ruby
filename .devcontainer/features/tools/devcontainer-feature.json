@@ -1,0 +1,20 @@
+{
+  "name": "sentry-ruby toolchain",
+  "id": "tools",
+  "version": "1.0.0",
+  "description": "Installs development dependencies required by the Ruby SDK to run all tests",
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/git",
+    "ghcr.io/devcontainers/features/github-cli",
+    "ghcr.io/nils-geistmann/devcontainers-features/zsh",
+    "ghcr.io/rocker-org/devcontainer-features/apt-packages",
+    "ghcr.io/devcontainers-extra/features/mise"
+  ],
+  "options": {
+    "rubyVersion": {
+      "type": "string",
+      "default": "latest",
+      "description": "Ruby version to pre-install. Switching versions requires an image rebuild."
+    }
+  }
+}

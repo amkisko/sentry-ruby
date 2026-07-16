@@ -1,0 +1,74 @@
+[settings]
+ruby.compile = false
+
+[tools]
+ruby = "latest"
+node = "lts"
+java = "temurin-21"
+
+[env]
+SENTRY_E2E_RAILS_APP_PORT = "{{ env.SENTRY_E2E_RAILS_APP_PORT | default(value='4000') }}"
+SENTRY_E2E_SVELTE_APP_PORT = "{{ env.SENTRY_E2E_SVELTE_APP_PORT | default(value='4001') }}"
+SENTRY_E2E_RAILS_APP_URL = "{{ env.SENTRY_E2E_RAILS_APP_URL | default(value='http://localhost:4000') }}"
+SENTRY_E2E_SVELTE_APP_URL = "{{ env.SENTRY_E2E_SVELTE_APP_URL | default(value='http://localhost:4001') }}"
+
+[tasks.lint]
+description = "Lint the whole repo with rubocop"
+dir = "{{ config_root }}"
+env.BUNDLE_GEMFILE = "{{ config_root }}/Gemfile.rubocop"
+run = [
+  "bundle check >/dev/null 2>&1 || bundle install",
+  "bundle exec rubocop"
+]
+
+[tasks."lint:fix"]
+description = "Lint the whole repo with rubocop and autocorrect"
+dir = "{{ config_root }}"
+env.BUNDLE_GEMFILE = "{{ config_root }}/Gemfile.rubocop"
+run = [
+  "bundle check >/dev/null 2>&1 || bundle install",
+  "bundle exec rubocop -a"
+]
+
+[tasks."services:redis"]
+description = "Start a local Redis server for specs and e2e apps; waits until ready, no-op if already running"
+run = """
+redis-cli ping >/dev/null 2>&1 && exit 0
+redis-server --daemonize yes --save '' --dir /tmp --pidfile /tmp/redis.pid
+for _ in $(seq 1 30); do
+  redis-cli ping >/dev/null 2>&1 && exit 0
+  sleep 0.2
+done
+echo 'redis did not become ready' >&2
+exit 1
+"""
+
+[tasks."e2e:rails"]
+description = "Start the rails-mini e2e app"
+depends = ["services:redis"]
+dir = "{{ config_root }}/spec/apps/rails-mini"
+run = [
+  "bundle check >/dev/null 2>&1 || bundle install",
+  "bundle exec ruby app.rb"
+]
+
+[tasks."e2e:svelte"]
+description = "Start the svelte-mini e2e app"
+dir = "{{ config_root }}/spec/apps/svelte-mini"
+run = [
+  "npm install",
+  "npm run dev"
+]
+
+[tasks."e2e:worker"]
+description = "Start the rails-mini ActiveJob worker (sidekiq/resque/delayed_job/solid_queue; idles for async/inline)"
+depends = ["services:redis"]
+dir = "{{ config_root }}/spec/apps/rails-mini"
+run = [
+  "bundle check >/dev/null 2>&1 || bundle install",
+  "bundle exec ruby worker.rb"
+]
+
+[tasks."e2e:serve"]
+description = "Start all e2e apps in parallel"
+depends = ["e2e:rails", "e2e:svelte", "e2e:worker"]

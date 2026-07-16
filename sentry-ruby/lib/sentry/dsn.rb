@@ -6,12 +6,14 @@ require "resolv"
 
 module Sentry
   class DSN
+    PROTOCOL_VERSION = "7"
     PORT_MAP = { "http" => 80, "https" => 443 }.freeze
     REQUIRED_ATTRIBUTES = %w[host path public_key project_id].freeze
     LOCALHOST_NAMES = %w[localhost 127.0.0.1 ::1 [::1]].freeze
     LOCALHOST_PATTERN = /\.local(host|domain)?$/i
+    ORG_ID_REGEX = /\Ao(\d+)\./
 
-    attr_reader :scheme, :secret_key, :port, *REQUIRED_ATTRIBUTES
+    attr_reader :scheme, :secret_key, :port, :org_id, *REQUIRED_ATTRIBUTES
 
     def initialize(dsn_string)
       @raw_value = dsn_string
@@ -30,6 +32,8 @@ module Sentry
       @host = uri.host
       @port = uri.port if uri.port
       @path = uri_path.join("/")
+
+      @org_id = extract_org_id_from_host
     end
 
     def valid?
@@ -52,6 +56,10 @@ module Sentry
 
     def envelope_endpoint
       "#{path}/api/#{project_id}/envelope/"
+    end
+
+    def otlp_traces_endpoint
+      "#{path}/api/#{project_id}/integration/otlp/v1/traces/"
     end
 
     def local?
@@ -80,6 +88,30 @@ module Sentry
           false
         end
       end
+    end
+
+    def generate_auth_header(client: nil)
+      now = Sentry.utc_now.to_i
+
+      fields = {
+        "sentry_version" => PROTOCOL_VERSION,
+        "sentry_timestamp" => now,
+        "sentry_key" => @public_key
+      }
+
+      fields["sentry_client"] = client if client
+      fields["sentry_secret"] = @secret_key if @secret_key
+
+      "Sentry " + fields.map { |key, value| "#{key}=#{value}" }.join(", ")
+    end
+
+    private
+
+    def extract_org_id_from_host
+      return nil unless @host
+
+      match = ORG_ID_REGEX.match(@host)
+      match ? match[1] : nil
     end
   end
 end

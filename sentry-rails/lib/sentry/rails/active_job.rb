@@ -5,13 +5,60 @@ require "set"
 module Sentry
   module Rails
     module ActiveJobExtensions
+      SENTRY_PAYLOAD_KEY = "_sentry"
+
+      USER_FIELDS_ALLOWLIST = %w[id email username].freeze
+
+      def self.prepended(base)
+        base.attr_accessor :_sentry
+      end
+
       def perform_now
         if !Sentry.initialized? || already_supported_by_sentry_integration?
           super
         else
-          SentryReporter.record(self) do
-            super
+          data = _sentry || {}
+          SentryReporter.record(
+            self,
+            trace_headers: data["trace_propagation_headers"],
+            user: data["user"]
+          ) { super }
+        end
+      end
+
+      def serialize
+        payload = super
+        return payload if !Sentry.initialized? || already_supported_by_sentry_integration?
+
+        begin
+          sentry_data = {}
+          if Sentry.configuration.rails.active_job_propagate_traces
+            headers = Sentry.get_trace_propagation_headers
+            sentry_data["trace_propagation_headers"] = headers if headers && !headers.empty?
           end
+
+          if Sentry.configuration.send_default_pii
+            user = Sentry.get_current_scope.user
+            allowed = user.transform_keys(&:to_s).slice(*USER_FIELDS_ALLOWLIST)
+            sentry_data["user"] = allowed unless allowed.empty?
+          end
+
+          payload[SENTRY_PAYLOAD_KEY] = sentry_data unless sentry_data.empty?
+        rescue StandardError => e
+          Sentry.sdk_logger&.error("sentry-rails: failed to inject _sentry payload: #{e.class}: #{e.message}\n  #{Array(e.backtrace).first(5).join("\n  ")}")
+        end
+
+        payload
+      end
+
+      def deserialize(job_data)
+        super
+        return if !Sentry.initialized? || already_supported_by_sentry_integration?
+
+        begin
+          self._sentry = job_data[SENTRY_PAYLOAD_KEY]
+        rescue StandardError => e
+          Sentry.sdk_logger&.error("sentry-rails: failed to extract _sentry payload: #{e.class}: #{e.message}\n  #{Array(e.backtrace).first(5).join("\n  ")}")
         end
       end
 
@@ -20,7 +67,7 @@ module Sentry
       end
 
       class SentryReporter
-        OP_NAME = "queue.active_job"
+        OP_NAME = "queue.process"
         SPAN_ORIGIN = "auto.queue.active_job"
 
         EVENT_HANDLERS = {
@@ -28,19 +75,83 @@ module Sentry
         }
 
         class << self
-          def record(job, &block)
+          def producer_callback_registered?
+            @producer_callback_registered ||= false
+          end
+
+          def producer_callback_registered!
+            @producer_callback_registered = true
+          end
+
+          def record_producer_span(job, &enqueue)
+            return yield if !Sentry.initialized? || job.already_supported_by_sentry_integration?
+
+            enqueued = false
+
+            run_enqueue = lambda do
+              enqueued = true
+              enqueue.call
+            end
+
+            begin
+              Sentry.with_child_span(op: "queue.publish", description: job.class.name) do |span|
+                if span
+                  span.set_origin(SPAN_ORIGIN)
+                  span.set_data(Sentry::Span::DataConventions::MESSAGING_MESSAGE_ID, job.job_id)
+                  span.set_data(Sentry::Span::DataConventions::MESSAGING_DESTINATION_NAME, job.queue_name)
+                end
+
+                run_enqueue.call
+              end
+            rescue StandardError => e
+              raise if enqueued
+
+              log_producer_span_error(e)
+
+              run_enqueue.call
+            end
+          end
+
+          def log_producer_span_error(e)
+            Sentry.sdk_logger&.error("sentry-rails: failed to record producer span: #{e.class}: #{e.message}\n  #{Array(e.backtrace).first(5).join("\n  ")}")
+          end
+
+          def record(job, trace_headers: nil, user: nil, &block)
+            original_hub = Sentry.get_current_hub_internal
+            Sentry.clone_hub_to_current_thread
+
             Sentry.with_scope do |scope|
               begin
-                scope.set_transaction_name(job.class.name, source: :task)
+                scope.set_user(user.transform_keys(&:to_sym)) if user && !user.empty?
 
-                transaction = Sentry.start_transaction(
+                scope.set_transaction_name(job.class.name, source: :task)
+                scope.set_tags(queue: job.queue_name)
+
+                scope.set_contexts(active_job: {
+                  job_class: job.class.name,
+                  job_id: job.job_id,
+                  queue: job.queue_name,
+                  provider_job_id: job.provider_job_id
+                })
+
+                transaction_options = {
                   name: scope.transaction_name,
                   source: scope.transaction_source,
                   op: OP_NAME,
                   origin: SPAN_ORIGIN
-                )
+                }
 
-                scope.set_span(transaction) if transaction
+                transaction = if trace_headers && !trace_headers.empty?
+                  continued = Sentry.continue_trace(trace_headers, **transaction_options)
+                  Sentry.start_transaction(transaction: continued, **transaction_options)
+                else
+                  Sentry.start_transaction(**transaction_options)
+                end
+
+                if transaction
+                  set_messaging_data(transaction, job)
+                  scope.set_span(transaction)
+                end
 
                 yield.tap do
                   finish_sentry_transaction(transaction, 200)
@@ -53,6 +164,25 @@ module Sentry
                 raise
               end
             end
+          ensure
+            Sentry.set_current_hub_internal(original_hub)
+          end
+
+          def set_messaging_data(transaction, job)
+            transaction.set_data(Sentry::Span::DataConventions::MESSAGING_MESSAGE_ID, job.job_id)
+            transaction.set_data(Sentry::Span::DataConventions::MESSAGING_DESTINATION_NAME, job.queue_name)
+            transaction.set_data(Sentry::Span::DataConventions::MESSAGING_MESSAGE_RETRY_COUNT, [job.executions.to_i - 1, 0].max)
+
+            if (latency = compute_latency(job))
+              transaction.set_data(Sentry::Span::DataConventions::MESSAGING_MESSAGE_RECEIVE_LATENCY, latency)
+            end
+          end
+
+          def compute_latency(job)
+            return unless job.respond_to?(:enqueued_at) && job.enqueued_at
+
+            enqueued_time = job.enqueued_at.is_a?(String) ? Time.parse(job.enqueued_at) : job.enqueued_at
+            ((Time.now.to_f - enqueued_time.to_f) * 1000).round
           end
 
           def capture_exception(job, e)
@@ -62,7 +192,10 @@ module Sentry
               tags: {
                 job_id: job.job_id,
                 provider_job_id: job.provider_job_id
-              }
+              },
+              # Send synchronously: a worker process may exit before the async
+              # background worker flushes its queue, which would drop the event.
+              hint: { background: false }
             )
           end
 

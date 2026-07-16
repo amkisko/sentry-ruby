@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require "sentry/threaded_periodic_worker"
 require "sentry/envelope"
 
@@ -50,12 +51,19 @@ module Sentry
     alias_method :run, :flush
 
     def add_item(item)
+      # Prevent ThreadError from re-entrant locking (e.g. transport instrumentation calling Sentry.metrics.*)
+      return self if @mutex.owned?
+
       @mutex.synchronize do
         return unless ensure_thread
 
         if size >= @max_items_before_drop
           log_debug("[#{self.class}] exceeded max capacity, dropping event")
-          @client.transport.record_lost_event(:queue_overflow, @data_category)
+          @client.transport.record_lost_event(
+            :queue_overflow,
+            @data_category,
+            num_bytes: JSON.generate(item.to_h).bytesize
+          )
         else
           @pending_items << item
         end
@@ -89,6 +97,7 @@ module Sentry
       )
 
       discarded_count = 0
+      discarded_bytes = 0
       envelope_items = []
 
       if @before_send
@@ -99,6 +108,7 @@ module Sentry
             envelope_items << processed_item.to_h
           else
             discarded_count += 1
+            discarded_bytes += JSON.generate(item.to_h).bytesize
           end
         end
       else
@@ -106,7 +116,7 @@ module Sentry
       end
 
       unless discarded_count.zero?
-        @client.transport.record_lost_event(:before_send, @data_category, num: discarded_count)
+        @client.transport.record_lost_event(:before_send, @data_category, num: discarded_count, num_bytes: discarded_bytes)
       end
 
       return if envelope_items.empty?

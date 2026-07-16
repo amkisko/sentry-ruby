@@ -49,6 +49,12 @@ module Sentry
 
       if response.code.match?(/\A2\d{2}/)
         handle_rate_limited_response(response) if has_rate_limited_header?(response)
+      elsif response.code == "413"
+        error_message = "HTTP 413: Envelope dropped due to exceeded size limit"
+        error_message += " (body: #{response.body})" if response.body && !response.body.empty?
+        log_warn(error_message)
+
+        raise Sentry::SizeExceededError, error_message
       elsif response.code == "429"
         log_debug("the server responded with status 429")
         handle_rate_limited_response(response)
@@ -69,17 +75,7 @@ module Sentry
     end
 
     def generate_auth_header
-      return nil unless @dsn
-
-      now = Sentry.utc_now.to_i
-      fields = {
-        "sentry_version" => PROTOCOL_VERSION,
-        "sentry_client" => USER_AGENT,
-        "sentry_timestamp" => now,
-        "sentry_key" => @dsn.public_key
-      }
-      fields["sentry_secret"] = @dsn.secret_key if @dsn.secret_key
-      "Sentry " + fields.map { |key, value| "#{key}=#{value}" }.join(", ")
+      @dsn&.generate_auth_header(client: USER_AGENT)
     end
 
     def conn

@@ -54,6 +54,12 @@ module Sentry
       current_layer&.client
     end
 
+    # All clients bound across the hub's scope stack, base layer first.
+    # @return [Array<Client>]
+    def clients
+      @stack.map(&:client).compact
+    end
+
     def configuration
       current_client.configuration
     end
@@ -243,7 +249,7 @@ module Sentry
         value: value,
         type: type,
         unit: unit,
-        attributes: attributes,
+        attributes: attributes&.dup,
       )
 
       current_client.buffer_metric_event(metric, current_scope)

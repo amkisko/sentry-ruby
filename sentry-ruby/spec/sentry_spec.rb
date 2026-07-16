@@ -110,6 +110,66 @@ RSpec.describe Sentry do
     end
   end
 
+  describe "fiber isolation", when: { fiber_storage?: [] } do
+    before do
+      perform_basic_setup { |config| config.hub_isolation_level = :fiber }
+    end
+
+    after do
+      described_class.set_current_hub_internal(nil)
+      described_class.instance_variable_set(:@hub_isolation_level, :thread)
+    end
+
+    # Regression for cross-request contamination on fiber-based servers (Falcon,
+    # async), where many concurrent requests run as sibling fibers on one thread.
+    # With thread-local storage they share a single hub, so a scope opened by one
+    # request and held across a reactor yield is visible to (and clobbered by) the
+    # others. Fiber storage gives each request fiber its own hub.
+    it "keeps each sibling fiber's scope isolated across a yield" do
+      transport = described_class.get_main_hub.current_client.transport
+      transport.events.clear
+
+      requests = 3.times.map do |i|
+        Fiber.new do
+          described_class.clone_hub_to_current_thread
+          described_class.configure_scope { |scope| scope.set_user(id: i) }
+          Fiber.yield # simulate yielding to the reactor mid-request
+          described_class.capture_message(i.to_s)
+        end
+      end
+
+      requests.each(&:resume) # every request sets its user, then yields
+      requests.each(&:resume) # every request now captures its event
+
+      attributed = transport.events.to_h { |e| [e.message.to_i, e.user[:id]] }
+      expect(attributed).to eq({ 0 => 0, 1 => 1, 2 => 2 })
+    end
+
+    it "lets a child fiber inherit the parent request's hub" do
+      described_class.clone_hub_to_current_thread
+      parent_hub = described_class.get_current_hub
+
+      inherited = Fiber.new { described_class.get_current_hub }.resume
+
+      expect(inherited).to eq(parent_hub)
+    end
+
+    it "stores the hub in a fiber variable (instead of a thread variable)" do
+      described_class.set_tags(outside_fiber: true)
+
+      fiber = Fiber.new do
+        described_class.clone_hub_to_current_thread
+        described_class.set_tags(inside_fiber: true)
+        described_class.get_current_scope.tags
+      end
+
+      inside_tags = fiber.resume
+
+      expect(inside_tags).to eq({ outside_fiber: true, inside_fiber: true })
+      expect(described_class.get_current_scope.tags).to eq({ outside_fiber: true })
+    end
+  end
+
   shared_examples "capture_helper" do
     context "with sending_allowed? condition" do
       before do
@@ -791,6 +851,37 @@ RSpec.describe Sentry do
     end
   end
 
+  describe ".set_attributes" do
+    it "adds attributes to the current scope" do
+      described_class.set_attributes("foo" => "bar", "baz" => 42)
+
+      expect(described_class.get_current_scope.attributes).to eq("foo" => "bar", "baz" => 42)
+    end
+  end
+
+  describe ".set_attribute" do
+    it "adds a single attribute to the current scope" do
+      described_class.set_attribute("foo", "bar")
+
+      expect(described_class.get_current_scope.attributes).to eq("foo" => "bar")
+    end
+
+    it "wraps the value when given the optional unit: param" do
+      described_class.set_attribute("duration", 3600, unit: "second")
+
+      expect(described_class.get_current_scope.attributes).to eq("duration" => { value: 3600, unit: "second" })
+    end
+  end
+
+  describe ".remove_attribute" do
+    it "removes an attribute from the current scope" do
+      described_class.set_attribute("foo", "bar")
+      described_class.remove_attribute("foo")
+
+      expect(described_class.get_current_scope.attributes).to eq({})
+    end
+  end
+
   describe ".add_attachment" do
     it "adds a new attachment to the current scope with provided filename and bytes" do
       described_class.add_attachment(filename: "test.txt", bytes: "test")
@@ -935,6 +1026,55 @@ RSpec.describe Sentry do
       META
 
       expect(described_class.get_trace_propagation_meta).to eq(meta.chomp)
+    end
+  end
+
+  describe ".register_external_propagation_context" do
+    after do
+      described_class.clear_external_propagation_context
+    end
+
+    it "registers a callback function" do
+      described_class.register_external_propagation_context do
+        ["trace123", "span456"]
+      end
+
+      expect(described_class.get_external_propagation_context).to eq(["trace123", "span456"])
+    end
+  end
+
+  describe ".get_external_propagation_context" do
+    after do
+      described_class.clear_external_propagation_context
+    end
+
+    it "returns nil when no callback is registered" do
+      expect(described_class.get_external_propagation_context).to be_nil
+    end
+
+    it "returns nil when callback returns nil" do
+      described_class.register_external_propagation_context do
+        nil
+      end
+
+      expect(described_class.get_external_propagation_context).to be_nil
+    end
+
+    it "returns the result from the callback" do
+      described_class.register_external_propagation_context do
+        ["abc123def456789012345678901234", "1234567890abcdef"]
+      end
+
+      result = described_class.get_external_propagation_context
+      expect(result).to eq(["abc123def456789012345678901234", "1234567890abcdef"])
+    end
+
+    it "catches errors from the callback and returns nil" do
+      described_class.register_external_propagation_context do
+        raise "Something went wrong"
+      end
+
+      expect(described_class.get_external_propagation_context).to be_nil
     end
   end
 
@@ -1186,6 +1326,15 @@ RSpec.describe Sentry do
       end
     end
 
+    it 'uses `KAMAL_VERSION` env variable' do
+      ENV['KAMAL_VERSION'] = 'GIT_SHA'
+
+      described_class.init
+      expect(described_class.configuration.release).to eq('GIT_SHA')
+
+      ENV.delete('KAMAL_VERSION')
+    end
+
     context "when git is available" do
       before do
         allow(File).to receive(:directory?).and_return(false)
@@ -1271,7 +1420,7 @@ RSpec.describe Sentry do
           end
         end
 
-        it "returns nil + logs an warning if HEROKU_SLUG_COMMIT is not set" do
+        it "returns nil + logs an warning if HEROKU_BUILD_COMMIT is not set" do
           string_io = StringIO.new
           logger = Logger.new(string_io)
 
@@ -1283,13 +1432,37 @@ RSpec.describe Sentry do
           expect(string_io.string).to include(Sentry::Configuration::HEROKU_DYNO_METADATA_MESSAGE)
         end
 
-        it "returns HEROKU_SLUG_COMMIT" do
+        it "returns HEROKU_BUILD_COMMIT" do
           begin
-            ENV["HEROKU_SLUG_COMMIT"] = "REVISION"
+            ENV["HEROKU_BUILD_COMMIT"] = "REVISION"
 
             described_class.init
             expect(described_class.configuration.release).to eq("REVISION")
           ensure
+            ENV["HEROKU_BUILD_COMMIT"] = nil
+          end
+        end
+
+        it "falls back to HEROKU_SLUG_COMMIT when HEROKU_BUILD_COMMIT is not set" do
+          begin
+            ENV["HEROKU_SLUG_COMMIT"] = "SLUG_REVISION"
+
+            described_class.init
+            expect(described_class.configuration.release).to eq("SLUG_REVISION")
+          ensure
+            ENV["HEROKU_SLUG_COMMIT"] = nil
+          end
+        end
+
+        it "prefers HEROKU_BUILD_COMMIT over HEROKU_SLUG_COMMIT" do
+          begin
+            ENV["HEROKU_BUILD_COMMIT"] = "BUILD_REVISION"
+            ENV["HEROKU_SLUG_COMMIT"] = "SLUG_REVISION"
+
+            described_class.init
+            expect(described_class.configuration.release).to eq("BUILD_REVISION")
+          ensure
+            ENV["HEROKU_BUILD_COMMIT"] = nil
             ENV["HEROKU_SLUG_COMMIT"] = nil
           end
         end

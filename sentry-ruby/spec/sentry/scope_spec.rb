@@ -44,6 +44,7 @@ RSpec.describe Sentry::Scope do
       copy.user.merge!(foo: "bar")
       copy.set_transaction_name("foo", source: :url)
       copy.fingerprint << "bar"
+      copy.set_attribute("foo", "bar")
 
       expect(subject.breadcrumbs.to_h).to eq({ values: [] })
       expect(subject.contexts[:os].keys).to match_array([:name, :version, :build, :kernel_version, :machine])
@@ -55,6 +56,17 @@ RSpec.describe Sentry::Scope do
       expect(subject.transaction_name).to eq(nil)
       expect(subject.transaction_source).to eq(nil)
       expect(subject.span).to eq(nil)
+      expect(subject.attributes).to eq({})
+    end
+
+    it "copies event_processors so mutations don't affect the original" do
+      subject.add_event_processor { |event, _hint| event }
+      copy = subject.dup
+
+      copy.add_event_processor { |event, _hint| event }
+
+      expect(subject.event_processors.length).to eq(1)
+      expect(copy.event_processors.length).to eq(2)
     end
 
     it "deep-copies span as well" do
@@ -130,6 +142,7 @@ RSpec.describe Sentry::Scope do
       subject.set_transaction_name("WelcomeController#index")
       subject.set_span(Sentry::Transaction.new(op: "foo"))
       subject.set_fingerprint(["foo"])
+      subject.set_attribute("foo", "bar")
       scope_id = subject.object_id
 
       subject.clear
@@ -145,6 +158,7 @@ RSpec.describe Sentry::Scope do
       expect(subject.transaction_name).to eq(nil)
       expect(subject.transaction_source).to eq(nil)
       expect(subject.span).to eq(nil)
+      expect(subject.attributes).to eq({})
     end
   end
 
@@ -183,6 +197,78 @@ RSpec.describe Sentry::Scope do
 
       it "returns nil" do
         expect(subject.get_span).to eq(nil)
+      end
+    end
+  end
+
+  describe "#get_trace_context" do
+    before { perform_basic_setup }
+
+    context "with span" do
+      let(:transaction) { Sentry::Transaction.new(op: "test") }
+
+      before do
+        subject.set_span(transaction)
+      end
+
+      it "returns the span's trace context with dynamic_sampling_context" do
+        trace_context = subject.get_trace_context
+        expect(trace_context[:trace_id]).to eq(transaction.trace_id)
+        expect(trace_context[:span_id]).to eq(transaction.span_id)
+        expect(trace_context[:op]).to eq("test")
+        expect(trace_context[:dynamic_sampling_context]).to eq(transaction.get_dynamic_sampling_context)
+      end
+
+      it "prioritizes span over external propagation context" do
+        Sentry.register_external_propagation_context do
+          ["abc123def456789012345678901234ab", "1234567890abcdef"]
+        end
+
+        trace_context = subject.get_trace_context
+        expect(trace_context[:trace_id]).to eq(transaction.trace_id)
+        expect(trace_context[:dynamic_sampling_context]).to eq(transaction.get_dynamic_sampling_context)
+
+        Sentry.clear_external_propagation_context
+      end
+    end
+
+    context "with external propagation context" do
+      let(:external_trace_id) { "abc123def456789012345678901234ab" }
+      let(:external_span_id) { "1234567890abcdef" }
+
+      before do
+        Sentry.register_external_propagation_context do
+          [external_trace_id, external_span_id]
+        end
+      end
+
+      after do
+        Sentry.clear_external_propagation_context
+      end
+
+      it "returns the external propagation context's trace context" do
+        trace_context = subject.get_trace_context
+        expect(trace_context[:trace_id]).to eq(external_trace_id)
+        expect(trace_context[:span_id]).to eq(external_span_id)
+      end
+    end
+
+    context "when external propagation context callback returns nil" do
+      before do
+        Sentry.register_external_propagation_context do
+          nil
+        end
+      end
+
+      after do
+        Sentry.clear_external_propagation_context
+      end
+
+      it "falls back to local propagation context with dynamic_sampling_context" do
+        trace_context = subject.get_trace_context
+        expect(trace_context[:trace_id]).to eq(subject.propagation_context.trace_id)
+        expect(trace_context[:span_id]).to eq(subject.propagation_context.span_id)
+        expect(trace_context[:dynamic_sampling_context]).to eq(subject.propagation_context.get_dynamic_sampling_context)
       end
     end
   end
@@ -300,6 +386,7 @@ RSpec.describe Sentry::Scope do
       subject.apply_to_event(event)
 
       expect(event.contexts[:trace]).to eq(transaction.get_trace_context)
+      expect(event.contexts[:trace]).not_to have_key(:dynamic_sampling_context)
       expect(event.contexts.dig(:trace, :op)).to eq("foo")
       expect(event.dynamic_sampling_context).to eq(transaction.get_dynamic_sampling_context)
     end
@@ -307,6 +394,7 @@ RSpec.describe Sentry::Scope do
     it "sets trace context and dynamic_sampling_context from propagation context if there's no span" do
       subject.apply_to_event(event)
       expect(event.contexts[:trace]).to eq(subject.propagation_context.get_trace_context)
+      expect(event.contexts[:trace]).not_to have_key(:dynamic_sampling_context)
       expect(event.dynamic_sampling_context).to eq(subject.propagation_context.get_dynamic_sampling_context)
     end
 
@@ -400,8 +488,7 @@ RSpec.describe Sentry::Scope do
       context "with user data" do
         before { subject.set_user({ id: 123, username: "john_doe", email: "john@example.com" }) }
 
-        it "adds user attributes when send_default_pii is enabled" do
-          Sentry.configuration.send_default_pii = true
+        it "adds user attributes" do
           subject.apply_to_telemetry(telemetry_event)
 
           hash = telemetry_event.to_h
@@ -409,21 +496,10 @@ RSpec.describe Sentry::Scope do
           expect(hash[:attributes]["user.name"]).to eq({ value: "john_doe", type: "string" })
           expect(hash[:attributes]["user.email"]).to eq({ value: "john@example.com", type: "string" })
         end
-
-        it "doesn't add user attributes when send_default_pii is disabled" do
-          Sentry.configuration.send_default_pii = false
-          subject.apply_to_telemetry(telemetry_event)
-
-          hash = telemetry_event.to_h
-          expect(hash[:attributes].key?("user.id")).to eq(false)
-          expect(hash[:attributes].key?("user.name")).to eq(false)
-          expect(hash[:attributes].key?("user.email")).to eq(false)
-        end
       end
 
       context "without user data" do
         it "does not add user attributes when user is empty" do
-          Sentry.configuration.send_default_pii = true
           subject.apply_to_telemetry(telemetry_event)
 
           hash = telemetry_event.to_h
@@ -471,6 +547,58 @@ RSpec.describe Sentry::Scope do
       end
     end
 
+    shared_examples "telemetry event scope attributes" do
+      it "applies scope attributes with inferred types" do
+        subject.set_attribute("app.flag", true)
+        subject.set_attribute("app.count", 3)
+
+        subject.apply_to_telemetry(telemetry_event)
+        attributes = telemetry_event.to_h[:attributes]
+
+        expect(attributes["app.flag"]).to eq({ value: true, type: "boolean" })
+        expect(attributes["app.count"]).to eq({ value: 3, type: "integer" })
+      end
+
+      it "carries the unit through when set via the object form" do
+        subject.set_attribute("app.duration", { value: 3600, unit: "second" })
+
+        subject.apply_to_telemetry(telemetry_event)
+        attributes = telemetry_event.to_h[:attributes]
+
+        expect(attributes["app.duration"]).to eq({ value: 3600, type: "integer", unit: "second" })
+      end
+
+      it "carries the unit through when set via the unit: param" do
+        subject.set_attribute("app.duration", 3600, unit: "second")
+
+        subject.apply_to_telemetry(telemetry_event)
+        attributes = telemetry_event.to_h[:attributes]
+
+        expect(attributes["app.duration"]).to eq({ value: 3600, type: "integer", unit: "second" })
+      end
+
+      it "does not overwrite an attribute already set on the telemetry item" do
+        telemetry_event.attributes["app.flag"] = false
+        subject.set_attribute("app.flag", true)
+
+        subject.apply_to_telemetry(telemetry_event)
+        attributes = telemetry_event.to_h[:attributes]
+
+        expect(attributes["app.flag"]).to eq({ value: false, type: "boolean" })
+      end
+
+      it "treats String and Symbol keys as the same when applying precedence" do
+        telemetry_event.attributes[:user_id] = 1
+        subject.set_attribute("user_id", 2)
+
+        subject.apply_to_telemetry(telemetry_event)
+        attributes = telemetry_event.to_h[:attributes]
+
+        expect(attributes.keys.map(&:to_s).count("user_id")).to eq(1)
+        expect(attributes[:user_id]).to eq({ value: 1, type: "integer" })
+      end
+    end
+
     context "with MetricEvent" do
       let(:telemetry_event) do
         Sentry::MetricEvent.new(name: "test.metric", type: :counter, value: 1)
@@ -479,6 +607,7 @@ RSpec.describe Sentry::Scope do
       include_examples "telemetry event user data"
       include_examples "telemetry event trace data"
       include_examples "telemetry event default attributes"
+      include_examples "telemetry event scope attributes"
     end
 
     context "with LogEvent" do
@@ -489,6 +618,7 @@ RSpec.describe Sentry::Scope do
       include_examples "telemetry event user data"
       include_examples "telemetry event trace data"
       include_examples "telemetry event default attributes"
+      include_examples "telemetry event scope attributes"
     end
   end
 end

@@ -3,7 +3,6 @@
 RSpec.describe "Sentry Metrics" do
   before do
     perform_basic_setup do |config|
-      config.enable_metrics = true
       config.traces_sample_rate = 1.0
       config.release = "test-release"
       config.environment = "test"
@@ -175,38 +174,45 @@ RSpec.describe "Sentry Metrics" do
           end
         end
 
-        context "when send_default_pii is true" do
-          before do
-            Sentry.configuration.send_default_pii = true
-          end
+        it "includes user attributes in the metric" do
+          Sentry.metrics.count("test.counter")
 
-          it "includes user attributes in the metric" do
-            Sentry.metrics.count("test.counter")
+          Sentry.get_current_client.flush
 
-            Sentry.get_current_client.flush
+          metric = sentry_metrics.first
+          attributes = metric[:attributes]
 
-            metric = sentry_metrics.first
-            attributes = metric[:attributes]
+          expect(attributes["user.id"]).to eq({ type: "integer", value: 123 })
+          expect(attributes["user.name"]).to eq({ type: "string", value: "jane" })
+          expect(attributes["user.email"]).to eq({ type: "string", value: "jane@example.com" })
+        end
+      end
 
-            expect(attributes["user.id"]).to eq({ type: "integer", value: 123 })
-            expect(attributes["user.name"]).to eq({ type: "string", value: "jane" })
-            expect(attributes["user.email"]).to eq({ type: "string", value: "jane@example.com" })
-          end
+      context "with attributes on scope" do
+        it "includes scope attributes with inferred types in the metric" do
+          Sentry.set_attribute("app.flag", true)
+          Sentry.set_attribute("app.duration", 3600, unit: "second")
+
+          Sentry.metrics.count("test.counter")
+
+          Sentry.get_current_client.flush
+
+          attributes = sentry_metrics.first[:attributes]
+
+          expect(attributes["app.flag"]).to eq({ type: "boolean", value: true })
+          expect(attributes["app.duration"]).to eq({ type: "integer", value: 3600, unit: "second" })
         end
 
-        context "when send_default_pii is false" do
-          it "does not include user attributes" do
-            Sentry.metrics.count("test.counter")
+        it "lets metric attributes take precedence over scope attributes" do
+          Sentry.set_attribute("shared", "from_scope")
 
-            Sentry.get_current_client.flush
+          Sentry.metrics.count("test.counter", attributes: { "shared" => "from_metric" })
 
-            metric = sentry_metrics.first
-            attributes = metric[:attributes]
+          Sentry.get_current_client.flush
 
-            expect(attributes).not_to have_key("user.id")
-            expect(attributes).not_to have_key("user.name")
-            expect(attributes).not_to have_key("user.email")
-          end
+          attributes = sentry_metrics.first[:attributes]
+
+          expect(attributes["shared"]).to eq({ type: "string", value: "from_metric" })
         end
       end
 
@@ -294,7 +300,6 @@ RSpec.describe "Sentry Metrics" do
       context "with before_send_metric callback" do
         it "receives MetricEvent" do
           perform_basic_setup do |config|
-            config.enable_metrics = true
             config.before_send_metric = lambda do |metric|
               expect(metric).to be_a(Sentry::MetricEvent)
               metric
@@ -307,7 +312,6 @@ RSpec.describe "Sentry Metrics" do
 
         it "allows modifying metrics before sending" do
           perform_basic_setup do |config|
-            config.enable_metrics = true
             config.before_send_metric = lambda do |metric|
               metric.attributes["modified"] = true
               metric
@@ -324,7 +328,6 @@ RSpec.describe "Sentry Metrics" do
 
         it "filters out metrics when callback returns nil" do
           perform_basic_setup do |config|
-            config.enable_metrics = true
             config.before_send_metric = lambda do |metric|
               metric.name == "test.filtered" ? nil : metric
             end
@@ -338,7 +341,7 @@ RSpec.describe "Sentry Metrics" do
 
           expect(sentry_metrics.count).to eq(1)
           expect(sentry_metrics.first[:name]).to eq("test.allowed")
-          expect(Sentry.get_current_client.transport).to have_recorded_lost_event(:before_send, 'trace_metric', num: 2)
+          expect(Sentry.get_current_client.transport).to have_recorded_lost_event(:before_send, 'trace_metric', num: 2, num_bytes: a_value > 0)
         end
       end
     end

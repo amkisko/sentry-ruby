@@ -402,6 +402,23 @@ RSpec.describe Sentry::Hub do
       expect(outter_event.tags).to eq({ level: 1 })
     end
 
+    it "doesn't leak event processors to the outer scope" do
+      processor_calls = 0
+
+      2.times do
+        subject.with_scope do |scope|
+          scope.add_event_processor do |event, _hint|
+            processor_calls += 1
+            event
+          end
+
+          subject.capture_message("test")
+        end
+      end
+
+      expect(processor_calls).to eq(2)
+    end
+
     it "doesn't leak data mutation" do
       inner_event = nil
       scope.set_tags({ level: 1 })
@@ -517,6 +534,20 @@ RSpec.describe Sentry::Hub do
 
         expect(subject.current_scope).to eq(old_scope)
       end
+    end
+  end
+
+  describe "#clients" do
+    it "returns the only client for a single-layer hub" do
+      expect(subject.clients).to eq([client])
+    end
+
+    it "returns every client across the scope stack, base layer first" do
+      new_client = Sentry::Client.new(configuration)
+      subject.push_scope
+      subject.bind_client(new_client)
+
+      expect(subject.clients).to eq([client, new_client])
     end
   end
 

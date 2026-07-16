@@ -220,6 +220,35 @@ module Sentry
       get_current_scope.set_context(*args)
     end
 
+    # @!method set_attributes
+    #   Updates the current scope's attributes by merging with the old value.
+    #   @param attributes_hash [Hash]
+    #   @return [Hash]
+    def set_attributes(attributes_hash)
+      return unless initialized?
+      get_current_scope.set_attributes(attributes_hash)
+    end
+
+    # @!method set_attribute
+    #   Sets a single attribute on the current scope.
+    #   @param key [String, Symbol]
+    #   @param value [Object]
+    #   @param unit [String, Symbol, nil] an optional measurement unit for the value
+    #   @return [Hash]
+    def set_attribute(key, value, unit: nil)
+      return unless initialized?
+      get_current_scope.set_attribute(key, value, unit: unit)
+    end
+
+    # @!method remove_attribute
+    #   Removes a single attribute from the current scope.
+    #   @param key [String, Symbol]
+    #   @return [void]
+    def remove_attribute(key)
+      return unless initialized?
+      get_current_scope.remove_attribute(key)
+    end
+
     # @!method add_attachment
     #   @!macro add_attachment
     def add_attachment(**opts)
@@ -242,7 +271,8 @@ module Sentry
       client = Client.new(config)
       scope = Scope.new(max_breadcrumbs: config.max_breadcrumbs)
       hub = Hub.new(client, scope)
-      Thread.current.thread_variable_set(THREAD_LOCAL, hub)
+      @hub_isolation_level = config.hub_isolation_level
+      set_current_hub_internal(hub)
       @main_hub = hub
       @background_worker = Sentry::BackgroundWorker.new(config)
       @session_flusher = config.session_tracking? ? Sentry::SessionFlusher.new(config, client) : nil
@@ -268,6 +298,7 @@ module Sentry
       end
 
       if client = get_current_client
+        client.configuration.run_after_close_callbacks
         client.flush
 
         if client.configuration.include_local_variables
@@ -279,7 +310,7 @@ module Sentry
 
       MUTEX.synchronize do
         @main_hub = nil
-        Thread.current.thread_variable_set(THREAD_LOCAL, nil)
+        set_current_hub_internal(nil)
       end
     end
 
@@ -332,7 +363,7 @@ module Sentry
       # ideally, we should do this proactively whenever a new thread is created
       # but it's impossible for the SDK to keep track every new thread
       # so we need to use this rather passive way to make sure the app doesn't crash
-      Thread.current.thread_variable_get(THREAD_LOCAL) || clone_hub_to_current_thread
+      get_current_hub_internal || clone_hub_to_current_thread
     end
 
     # Returns the current active client.
@@ -350,12 +381,14 @@ module Sentry
       get_current_hub.current_scope
     end
 
-    # Clones the main thread's active hub and stores it to the current thread.
+    # Clones the main hub and stores it for the current execution context
+    # (the current thread, or the current fiber when +config.hub_isolation_level+
+    # is +:fiber+).
     #
     # @return [void]
     def clone_hub_to_current_thread
       return unless initialized?
-      Thread.current.thread_variable_set(THREAD_LOCAL, get_main_hub.clone)
+      set_current_hub_internal(get_main_hub.clone)
     end
 
     # Takes a block and yields the current active scope.
@@ -666,6 +699,38 @@ module Sentry
       META
     end
 
+    # Registers a callback function that retrieves the current external propagation context.
+    # This is used by OpenTelemetry integration to provide trace_id and span_id from OTel context.
+    #
+    # @param callback [Proc, nil] A callable that returns [trace_id, span_id] or nil
+    # @return [void]
+    #
+    # @example
+    #   Sentry.register_external_propagation_context do
+    #     span_context = OpenTelemetry::Trace.current_span.context
+    #     return nil unless span_context.valid?
+    #     [span_context.hex_trace_id, span_context.hex_span_id]
+    #   end
+    def register_external_propagation_context(&callback)
+      @external_propagation_context_callback = callback
+    end
+
+    # Returns the external propagation context (trace_id, span_id) if a callback is registered.
+    #
+    # @return [Array<String>, nil] A tuple of [trace_id, span_id] or nil if no context is available
+    def get_external_propagation_context
+      return nil unless @external_propagation_context_callback
+
+      @external_propagation_context_callback.call
+    rescue => e
+      sdk_logger&.debug(LOGGER_PROGNAME) { "Error getting external propagation context: #{e.message}" } if initialized?
+      nil
+    end
+
+    def clear_external_propagation_context
+      @external_propagation_context_callback = nil
+    end
+
     # @!visibility private
     def utc_now
       Time.now.utc
@@ -674,6 +739,35 @@ module Sentry
     # @!visibility private
     def dependency_installed?(name)
       Object.const_defined?(name)
+    end
+
+    # Reads the hub stored for the current execution context. The active
+    # isolation level (cached from +config.hub_isolation_level+ at init) decides
+    # whether that context is the current thread or the current fiber. Reads the
+    # cached level rather than the configuration to avoid recursing back through
+    # hub resolution.
+    #
+    # @!visibility private
+    # @return [Hub, nil]
+    def get_current_hub_internal
+      if @hub_isolation_level == :fiber
+        ::Fiber[THREAD_LOCAL]
+      else
+        ::Thread.current.thread_variable_get(THREAD_LOCAL)
+      end
+    end
+
+    # Stores +hub+ for the current execution context (thread or fiber).
+    #
+    # @!visibility private
+    # @param hub [Hub, nil]
+    # @return [Hub, nil]
+    def set_current_hub_internal(hub)
+      if @hub_isolation_level == :fiber
+        ::Fiber[THREAD_LOCAL] = hub
+      else
+        ::Thread.current.thread_variable_set(THREAD_LOCAL, hub)
+      end
     end
   end
 end

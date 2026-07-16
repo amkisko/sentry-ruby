@@ -33,7 +33,7 @@ module Sentry
         type: @type,
         value: @value,
         unit: @unit,
-        timestamp: @timestamp,
+        timestamp: @timestamp.to_f,
         trace_id: @trace_id,
         span_id: @span_id,
         attributes: serialize_attributes
@@ -43,7 +43,7 @@ module Sentry
     private
 
     def serialize_attributes
-      @attributes.transform_values! { |v| attribute_hash(v) }
+      @attributes.transform_values { |v| attribute_hash(v) }
     end
   end
 end

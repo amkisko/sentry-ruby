@@ -329,6 +329,17 @@ RSpec.describe Sentry::Configuration do
     expect { subject.before_breadcrumb = true }.to raise_error(ArgumentError, "before_breadcrumb must be callable (or nil to disable)")
   end
 
+  describe "#capture_queue_time" do
+    it "defaults to true" do
+      expect(subject.capture_queue_time).to eq(true)
+    end
+
+    it "can be set to false" do
+      subject.capture_queue_time = false
+      expect(subject.capture_queue_time).to eq(false)
+    end
+  end
+
   context 'being initialized with a current environment' do
     before(:each) do
       subject.environment = 'test'
@@ -558,6 +569,20 @@ RSpec.describe Sentry::Configuration do
     end
   end
 
+  describe '#run_after_close_callbacks' do
+    it 'calls hooks registered with after(:closed)' do
+      called = false
+
+      config = Class.new(Sentry::Configuration) do
+        after(:closed) do
+          called = true
+        end
+      end.new
+
+      expect { config.run_after_close_callbacks }.to change { called }.from(false).to(true)
+    end
+  end
+
   describe "#skip_rake_integration" do
     it "returns false by default" do
       expect(subject.skip_rake_integration).to eq(false)
@@ -671,6 +696,42 @@ RSpec.describe Sentry::Configuration do
     end
   end
 
+  describe "#hub_isolation_level" do
+    it "defaults to :thread" do
+      expect(subject.hub_isolation_level).to eq(:thread)
+    end
+
+    it "accepts :thread" do
+      subject.hub_isolation_level = :thread
+      expect(subject.hub_isolation_level).to eq(:thread)
+    end
+
+    it "raises ArgumentError for an unknown level" do
+      expect { subject.hub_isolation_level = :process }
+        .to raise_error(ArgumentError, /hub_isolation_level must be one of/)
+    end
+
+    context "when Fiber storage is available", when: { fiber_storage?: [] } do
+      it "accepts :fiber" do
+        subject.hub_isolation_level = :fiber
+        expect(subject.hub_isolation_level).to eq(:fiber)
+      end
+
+      it "coerces string values" do
+        subject.hub_isolation_level = "fiber"
+        expect(subject.hub_isolation_level).to eq(:fiber)
+      end
+    end
+
+    context "when Fiber storage is unavailable", when: { no_fiber_storage?: [] } do
+      it "falls back to :thread with a warning" do
+        expect(subject).to receive(:log_warn).with(/requires Ruby 3\.2\+ Fiber Storage/)
+        subject.hub_isolation_level = :fiber
+        expect(subject.hub_isolation_level).to eq(:thread)
+      end
+    end
+  end
+
   describe "#validate" do
     it "logs a warning if StackProf is not installed" do
       allow(Sentry).to receive(:dependency_installed?).with(:StackProf).and_return(false)
@@ -759,13 +820,13 @@ RSpec.describe Sentry::Configuration do
   end
 
   describe "#enable_metrics" do
-    it "returns false by default" do
-      expect(subject.enable_metrics).to eq(false)
+    it "returns true by default" do
+      expect(subject.enable_metrics).to eq(true)
     end
 
-    it "can be set to true" do
-      subject.enable_metrics = true
-      expect(subject.enable_metrics).to eq(true)
+    it "can be set to false" do
+      subject.enable_metrics = false
+      expect(subject.enable_metrics).to eq(false)
     end
   end
 

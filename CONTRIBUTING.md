@@ -32,7 +32,7 @@ The devcontainer is configured with `.devcontainer/.env` file, that you need to 
 cp .devcontainer/.env.example .devcontainer/.env
 ```
 
-This file defines which specific image and Ruby version will be used to run the code. Edit it whenever you need to use a different image or Ruby version.
+This file defines runtime settings for local e2e apps and devcontainer workflows.
 
 ## Contribute To Individual Gems
 
@@ -42,11 +42,48 @@ This file defines which specific image and Ruby version will be used to run the 
   bundle install
   ```
 - Install any additional dependencies. `sentry-sidekiq` assumes you have `redis` running.
-- Use `bundle exec rake` to run tests.
+- Use the `./bin/test` helper to run tests.
   - In `sentry-rails`, you can use `RAILS_VERSION=version` to specify the Rails version to test against. Default is `8.0`
   - In `sentry-sidekiq`, you can use `SIDEKIQ_VERSION=version` to specify what version of Sidekiq to install when you run `bundle install`. Default is `7.0`
 - Use example apps under the `example` or `examples` folder to test the change. (Remember to change the DSN first)
 - To learn more about `sentry-ruby`'s structure, you can read the [Sentry SDK spec]
+
+## Regenerating CI Lockfiles
+
+CI installs against a committed, checksummed lockfile per test-matrix cell (`<gem>/gemfiles/<cell>.gemfile.lock`) to keep dependencies fully pinned against supply chain attacks. Each gem's `test-matrix.json` is the source of truth; `bin/relock` materializes the gemfiles and locks from it.
+
+We use [mise](https://mise.jdx.dev) for managing the ruby versions, so first install that by following official instructions. The required Rubies are declared in `.mise.ci.toml`, so provision them once:
+
+```bash
+mise --env ci install            # installs every Ruby the matrix needs
+```
+
+Then regenerate locks:
+
+```bash
+bin/relock                                   # every cell
+bin/relock --gem sentry-ruby                 # one gem
+bin/relock --cell sentry-ruby/gemfiles/ruby-3.2_rack-3_redis-5.gemfile  # one cell
+```
+
+In CI, the `Update lockfiles` workflow runs `relock` on a weekly schedule and opens a PR with the refreshed pins.
+
+### Compiling old rubies
+
+Old rubies are not available pre-compiled by `mise` so you might need some additional flags depending on your system:
+
+On latest macos, Ruby 3.0 needs a [patch](https://bugs.ruby-lang.org/issues/20760#note-4) to compile:
+
+```bash
+MISE_RUBY_APPLY_PATCHES="https://github.com/ruby/ruby/commit/1dfe75b0beb7171b8154ff0856d5149be0207724.patch" \
+  mise install ruby@3.0
+```
+
+On new linuxes with a very new `gcc`, you might need:
+
+```bash
+CFLAGS="-std=gnu11" mise install ruby@2.7
+```
 
 ## Write Your Sentry Extension
 

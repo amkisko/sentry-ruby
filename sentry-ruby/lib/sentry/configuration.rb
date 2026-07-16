@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "cgi/escape"
 require "concurrent/utility/processor_counter"
 
 require "sentry/utils/exception_cause_chain"
@@ -234,6 +235,12 @@ module Sentry
     # @return [Boolean]
     attr_accessor :send_default_pii
 
+    # Capture queue time from X-Request-Start header set by reverse proxies.
+    # Works with any Rack app behind Nginx, HAProxy, Heroku router, etc.
+    # Defaults to true.
+    # @return [Boolean]
+    attr_accessor :capture_queue_time
+
     # Allow to skip Sentry emails within rake tasks
     # @return [Boolean]
     attr_accessor :skip_rake_integration
@@ -338,7 +345,7 @@ module Sentry
     # @return [Integer]
     attr_accessor :max_log_events
 
-    # Enable metrics collection
+    # Enable metrics collection, defaults to true
     # @return [Boolean]
     attr_accessor :enable_metrics
 
@@ -363,6 +370,41 @@ module Sentry
     #   end
     # @return [Proc, nil]
     attr_reader :std_lib_logger_filter
+
+    # An optional organization ID. The SDK will try to extract it from the DSN in most cases
+    # but you can provide it explicitly for self-hosted and Relay setups.
+    # This value is used for trace propagation and for features like strict_trace_continuation.
+    # @return [String, nil]
+    attr_reader :org_id
+
+    # If set to true, the SDK will only continue a trace if the org_id of the incoming trace found in the
+    # baggage header matches the org_id of the current Sentry client and only if BOTH are present.
+    #
+    # If set to false, consistency of org_id will only be enforced if both are present.
+    # If either are missing, the trace will be continued.
+    #
+    # The client's organization ID is extracted from the DSN or can be set with the org_id option.
+    # If the organization IDs do not match, the SDK will start a new trace instead of continuing the incoming one.
+    # This is useful to prevent traces of unknown third-party services from being continued in your application.
+    # @return [Boolean]
+    attr_accessor :strict_trace_continuation
+
+    # Which execution primitive owns the SDK's current hub.
+    #
+    # [+:thread+ (default)] Store the hub in thread-local storage. Correct for
+    #   thread-based servers (Puma, Unicorn) and background processors (Sidekiq,
+    #   Resque). Every fiber on a thread shares one hub.
+    # [+:fiber+] Store the hub in Fiber Storage (Ruby 3.2+). Each fiber gets its
+    #   own hub and child fibers inherit it, so concurrent requests on a
+    #   fiber-based server (Falcon/async) are isolated instead of sharing and
+    #   corrupting one another's scope. Requested on a Ruby without Fiber
+    #   Storage (< 3.2), the SDK logs a warning and falls back to +:thread+.
+    #
+    # @return [Symbol]
+    attr_reader :hub_isolation_level
+
+    # Isolation levels the SDK understands for hub storage.
+    ISOLATION_LEVELS = %i[thread fiber].freeze
 
     # these are not config options
     # @!visibility private
@@ -436,7 +478,8 @@ module Sentry
       def callbacks
         @callbacks ||= {
           initialize: { before: [], after: [] },
-          configured: { before: [], after: [] }
+          configured: { before: [], after: [] },
+          closed: { before: [], after: [] }
         }
       end
 
@@ -512,6 +555,10 @@ module Sentry
       self.enable_backpressure_handling = false
       self.trusted_proxies = []
       self.dsn = ENV["SENTRY_DSN"]
+      self.capture_queue_time = true
+      self.org_id = nil
+      self.strict_trace_continuation = false
+      self.hub_isolation_level = :thread
 
       spotlight_env = ENV["SENTRY_SPOTLIGHT"]
       spotlight_bool = Sentry::Utils::EnvHelper.env_to_bool(spotlight_env, strict: true)
@@ -531,7 +578,7 @@ module Sentry
       self.rack_env_whitelist = RACK_ENV_WHITELIST_DEFAULT
       self.traces_sampler = nil
       self.enable_logs = false
-      self.enable_metrics = false
+      self.enable_metrics = true
 
       self.profiler_class = Sentry::Profiler
       self.profiles_sample_interval = DEFAULT_PROFILES_SAMPLE_INTERVAL
@@ -579,6 +626,23 @@ module Sentry
       check_argument_type!(value, String, NilClass)
 
       @release = value
+    end
+
+    def hub_isolation_level=(level)
+      level = level.to_sym if level.respond_to?(:to_sym)
+
+      unless ISOLATION_LEVELS.include?(level)
+        raise ArgumentError, "hub_isolation_level must be one of #{ISOLATION_LEVELS.inspect}, got #{level.inspect}"
+      end
+
+      # :fiber relies on Fiber Storage (Ruby 3.2+); downgrade so the hub is never
+      # asked to call Fiber[] on a Ruby that lacks it.
+      if level == :fiber && !fiber_storage_available?
+        log_warn("hub_isolation_level :fiber requires Ruby 3.2+ Fiber Storage; falling back to :thread on Ruby #{RUBY_VERSION}.")
+        level = :thread
+      end
+
+      @hub_isolation_level = level
     end
 
     def breadcrumbs_logger=(logger)
@@ -663,6 +727,16 @@ module Sentry
       end
 
       @profiler_class = profiler_class
+    end
+
+    def org_id=(value)
+      @org_id = value&.to_s
+    end
+
+    # Returns the effective org ID, preferring the explicit config option over the DSN-parsed value.
+    # @return [String, nil]
+    def effective_org_id
+      org_id || dsn&.org_id
     end
 
     def sending_allowed?
@@ -760,7 +834,16 @@ module Sentry
       @errors.join(", ")
     end
 
+    # @api private
+    def run_after_close_callbacks
+      run_callbacks(:after, :closed)
+    end
+
     private
+
+    def fiber_storage_available?
+      ::Fiber.respond_to?(:[]) && ::Fiber.respond_to?(:[]=)
+    end
 
     def init_dsn(dsn_string)
       return if dsn_string.nil? || dsn_string.empty?

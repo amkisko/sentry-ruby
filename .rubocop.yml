@@ -1,1 +1,21 @@
-../.rubocop.yml
+inherit_gem:
+  rubocop-rails-omakase: rubocop.yml
+
+Layout/SpaceInsideArrayLiteralBrackets:
+  Enabled: false
+
+Layout/EmptyLineAfterMagicComment:
+  Enabled: true
+
+Style/FrozenStringLiteralComment:
+  Enabled: true
+
+Style/RedundantFreeze:
+  Enabled: true
+
+AllCops:
+  Exclude:
+    - "sentry-*/tmp/**/*"
+    - "sentry-*/examples/**/*"
+    - "sentry-*/spec/versioned/2.7/**/*"
+    - "**/gemfiles/**/*"

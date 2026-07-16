@@ -5,7 +5,10 @@ ruby/
 log/
 .bundle
 *.gem
-gemfiles/*.lock
+# Per-matrix lockfiles (<gem>/gemfiles/*.gemfile.lock) ARE committed (supply-chain
+# pinning). The wrapper *.gemfile is regenerated on the fly (identical one-liner),
+# so ignore it. Default locally-resolved lockfiles also stay ignored.
+*/gemfiles/*.gemfile
 Gemfile.lock
 .coveralls.yml
 .ruby-version
@@ -18,10 +21,19 @@ Gemfile.lock
 node_modules
 .vite
 
-.devcontainer/.env
-vendor/gems
-sentry-rails/Gemfile-*.lock
+.DS_Store
+
 mise.toml
+
+.devcontainer/.env
+
+vendor/gems
+
+sentry-rails/Gemfile-*.lock
+
+sentry-yabeda/.DS_Store
+sentry-yabeda/.rspec_status
+sentry-yabeda/Gemfile-*.lock
 
 # rspec failure tracking
 .rspec_status

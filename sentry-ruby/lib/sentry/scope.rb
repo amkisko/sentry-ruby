@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "set"
 require "sentry/breadcrumb_buffer"
 require "sentry/propagation_context"
 require "sentry/attachment"
@@ -24,7 +25,8 @@ module Sentry
       :span,
       :session,
       :attachments,
-      :propagation_context
+      :propagation_context,
+      :attributes
     ]
 
     attr_reader(*ATTRIBUTES)
@@ -60,19 +62,10 @@ module Sentry
         event.attachments = attachments
       end
 
-      if span
-        event.contexts[:trace] ||= span.get_trace_context
-
-        if event.respond_to?(:dynamic_sampling_context)
-          event.dynamic_sampling_context ||= span.get_dynamic_sampling_context
-        end
-      else
-        event.contexts[:trace] ||= propagation_context.get_trace_context
-
-        if event.respond_to?(:dynamic_sampling_context)
-          event.dynamic_sampling_context ||= propagation_context.get_dynamic_sampling_context
-        end
-      end
+      trace_context = get_trace_context
+      dynamic_sampling_context = trace_context.delete(:dynamic_sampling_context)
+      event.contexts[:trace] ||= trace_context
+      event.dynamic_sampling_context ||= dynamic_sampling_context
 
       all_event_processors = self.class.global_event_processors + @event_processors
 
@@ -93,8 +86,16 @@ module Sentry
     # @param telemetry [MetricEvent, LogEvent] the telemetry event to apply scope context to
     # @return [MetricEvent, LogEvent] the telemetry event with scope context applied
     def apply_to_telemetry(telemetry)
-      # TODO-neel when new scope set_attribute api is added: add them here
-      trace_context = span ? span.get_trace_context : propagation_context.get_trace_context
+      # Compare as strings since String and Symbol keys serialize to the same wire key.
+      existing_keys = telemetry.attributes.keys.map(&:to_s).to_set
+
+      attributes.each do |key, value|
+        next if existing_keys.include?(key)
+
+        telemetry.attributes[key] = value
+      end
+
+      trace_context = get_trace_context
       telemetry.trace_id = trace_context[:trace_id]
       telemetry.span_id = trace_context[:span_id]
 
@@ -107,7 +108,7 @@ module Sentry
       telemetry.attributes["sentry.release"] ||= configuration.release if configuration.release
       telemetry.attributes["server.address"] ||= configuration.server_name if configuration.server_name
 
-      if configuration.send_default_pii && !user.empty?
+      unless user.empty?
         telemetry.attributes["user.id"] ||= user[:id] if user[:id]
         telemetry.attributes["user.name"] ||= user[:username] if user[:username]
         telemetry.attributes["user.email"] ||= user[:email] if user[:email]
@@ -144,6 +145,8 @@ module Sentry
       copy.session = session.deep_dup
       copy.propagation_context = propagation_context.deep_dup
       copy.attachments = attachments.dup
+      copy.event_processors = event_processors.dup
+      copy.attributes = attributes.deep_dup
       copy
     end
 
@@ -162,6 +165,7 @@ module Sentry
       self.span = scope.span
       self.propagation_context = scope.propagation_context
       self.attachments = scope.attachments
+      self.attributes = scope.attributes
     end
 
     # Updates the scope's data from the given options.
@@ -264,6 +268,32 @@ module Sentry
       set_contexts(key => value)
     end
 
+    # Updates the scope's attributes by merging with the old value.
+    # @param attributes_hash [Hash]
+    # @return [Hash]
+    def set_attributes(attributes_hash)
+      check_argument_type!(attributes_hash, Hash)
+      attributes_hash.each { |key, value| @attributes[key.to_s] = value }
+      @attributes
+    end
+
+    # Sets a single attribute on the scope.
+    # @param key [String, Symbol]
+    # @param value [Object]
+    # @param unit [String, Symbol, nil] an optional measurement unit for the value
+    # @return [Hash]
+    def set_attribute(key, value, unit: nil)
+      value = { value: value, unit: unit } unless unit.nil?
+      set_attributes(key => value)
+    end
+
+    # Removes a single attribute from the scope. No-op if the attribute is not set.
+    # @param key [String, Symbol]
+    # @return [void]
+    def remove_attribute(key)
+      @attributes.delete(key.to_s)
+    end
+
     # Sets the scope's level attribute.
     # @param level [String, Symbol]
     # @return [void]
@@ -303,6 +333,20 @@ module Sentry
     # @return [Span, nil]
     def get_span
       span
+    end
+
+    # Returns the trace context for this scope.
+    # Prioritizes external propagation context (from OTel) over local propagation context.
+    # @return [Hash]
+    def get_trace_context
+      if span
+        span.get_trace_context.merge(dynamic_sampling_context: span.get_dynamic_sampling_context)
+      elsif (external_context = Sentry.get_external_propagation_context)
+        trace_id, span_id = external_context
+        { trace_id: trace_id, span_id: span_id }
+      else
+        propagation_context.get_trace_context.merge(dynamic_sampling_context: propagation_context.get_dynamic_sampling_context)
+      end
     end
 
     # Sets the scope's fingerprint attribute.
@@ -355,6 +399,7 @@ module Sentry
       @span = nil
       @session = nil
       @attachments = []
+      @attributes = {}
       generate_propagation_context
       set_new_breadcrumb_buffer
     end

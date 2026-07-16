@@ -67,7 +67,7 @@ RSpec.shared_examples "telemetry event buffer" do |event_factory:, max_items_con
 
       threads = 3.times.map do
         Thread.new do
-          (20..30).to_a.sample.times { subject.add_item(event) }
+          (21..30).to_a.sample.times { subject.add_item(event) }
         end
       end
 
@@ -109,7 +109,7 @@ RSpec.shared_examples "telemetry event buffer" do |event_factory:, max_items_con
     it "records lost event when dropping due to queue overflow" do
       max_items_before_drop.times { subject.add_item(event) }
 
-      expect(client.transport).to receive(:record_lost_event).with(:queue_overflow, subject.data_category)
+      expect(client.transport).to receive(:record_lost_event).with(:queue_overflow, subject.data_category, num_bytes: a_value > 0)
 
       subject.add_item(event)
     end
@@ -119,6 +119,42 @@ RSpec.shared_examples "telemetry event buffer" do |event_factory:, max_items_con
       subject.add_item(event)
 
       expect(string_io.string).to include("exceeded max capacity, dropping event")
+    end
+  end
+
+  describe "re-entrancy protection" do
+    let(:max_items) { 3 }
+
+    it "does not deadlock when add_item is called re-entrantly from send_items" do
+      reentrant_calls = 0
+
+      allow(client).to receive(:send_envelope) do
+        reentrant_calls += 1
+        # Simulate instrumentation calling back into the buffer mid-send
+        subject.add_item(event)
+        # also simulate a second re-entrant call to be sure
+        subject.add_item(event)
+      end
+
+      expect {
+        3.times { subject.add_item(event) }
+      }.not_to raise_error
+
+      expect(reentrant_calls).to be >= 1
+    end
+
+    it "silently drops the re-entrant item rather than raising" do
+      items_sent = []
+
+      allow(client).to receive(:send_envelope) do |envelope|
+        items_sent << :sent
+        subject.add_item(event)  # re-entrant; must be dropped, not raise
+      end
+
+      3.times { subject.add_item(event) }
+
+      expect(items_sent).not_to be_empty
+      expect(string_io.string).not_to include("deadlock")
     end
   end
 

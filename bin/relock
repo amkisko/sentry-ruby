@@ -1,0 +1,179 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Regenerate the per-matrix CI lockfiles that pin our dependencies
+# (supply-chain hardening). Each test-matrix cell gets a committed
+# `<gem>/gemfiles/<cell>.gemfile` wrapper and a `.gemfile.lock`; this script
+# generates both.
+#
+# Each gem's `test-matrix.json` IS the source of truth — we expand cells from
+# those declarative matrices (the same files CI reads to build its job matrix),
+# so the locks can never drift from the matrix CI actually runs. Edit the matrix
+# to add/remove a cell, then run this to materialize the gemfiles and locks.
+#
+# Each cell must resolve against its own Ruby (gemspecs gate on
+# required_ruby_version), so every cell runs under a matching Ruby provided by
+# mise (https://mise.jdx.dev). The required Rubies are declared in
+# .mise.ci.toml; install them once with `mise --env ci install`. This
+# script resolves against those already-installed Rubies and aborts if any are
+# missing.
+#
+#   bin/relock                         # refresh every cell
+#   bin/relock --gem sentry-ruby       # one gem
+#   bin/relock --cell sentry-ruby/gemfiles/ruby-3.2_rack-3_redis-5.gemfile
+#   bin/relock --force                 # delete each lock before resolving
+#   bin/relock -l                      # list every cell's lock path
+#
+# The committed locks are multi platform, so they include dev machine platforms and
+# more importantly, ALWAYS x86_64-linux-gnu so that CI runners (Ubuntu/glibc)
+# can install precompiled native gems (e.g. sqlite3) without recompiling.
+#
+# See --help for all options.
+
+require "optparse"
+require_relative "lib/matrix"
+include Matrix
+
+# Shell run under the cell's Ruby. Writes the wrapper, re-resolves, adds
+# checksums, and seeds x86_64-linux-gnu into PLATFORMS.
+#
+# When FORCE is set, the existing lock is deleted first so bundler resolves from scratch, use for edge cases.
+RESOLVE = <<~SH
+  set -euo pipefail
+  mkdir -p "$(dirname "$BUNDLE_GEMFILE")"
+  echo 'eval_gemfile "../Gemfile"' > "$BUNDLE_GEMFILE"
+  if [ -n "${FORCE:-}" ]; then
+    echo "+ FORCE: removing $BUNDLE_GEMFILE.lock"
+    rm -f "$BUNDLE_GEMFILE.lock"
+  fi
+  platform_arg=""
+  if [ -z "${JRUBY:-}" ]; then platform_arg="--add-platform x86_64-linux-gnu"; fi
+  lock_help="$(bundle lock --help 2>&1)"
+  if echo "$lock_help" | grep -q -- --add-checksums; then
+    echo "+ bundle lock --update --add-checksums $platform_arg"
+    bundle lock --update --add-checksums $platform_arg
+  else
+    echo "+ bundle lock --update $platform_arg"
+    bundle lock --update $platform_arg
+  fi
+SH
+
+def run_mise(cell, force: false)
+  # bash -c (not -lc): inherit the PATH/env mise just set; a login shell would
+  # re-source the profile and reset Ruby back to the host default.
+  argv = [mise_bin, "exec", "ruby@#{cell.ruby}", "--", "bash", "-c", RESOLVE]
+  env = cell_env(cell)
+  env = env.merge("FORCE" => "1") if force
+  env = env.merge("JRUBY" => "1") if cell.ruby.start_with?("jruby")
+  [env, argv]
+end
+
+# ---- options -------------------------------------------------------------
+
+opts = {
+  gems: [],
+  cell: nil,
+  list: false,
+  force: false
+}
+
+parser = OptionParser.new do |o|
+  o.banner = "Usage: bin/relock [options]"
+  o.on("--gem NAME", "Only one gem (repeatable). Default: all.") { |v| opts[:gems] << v }
+  o.on("--cell PATH", "Resolve exactly one cell by its wrapper/lock path.") { |v| opts[:cell] = v }
+  o.on("-l", "--list", "List every cell's lock path, one per line; do nothing.") { opts[:list] = true }
+  o.on("--force", "Delete each lock before resolving (resolve from scratch).") { opts[:force] = true }
+  o.on("-h", "--help") { puts o; exit 0 }
+end
+parser.parse!(ARGV)
+
+# ---- select cells --------------------------------------------------------
+
+if opts[:cell]
+  # single explicit cell
+  gem, base = cell_path_parts(opts[:cell])
+  abort "--cell must point at a <gem>/gemfiles/<cell>.gemfile path" unless gem && base
+  cells = [parse_cell(gem, base)]
+else
+  gems = opts[:gems].empty? ? all_gems : opts[:gems]
+  cells = discover_cells(gems)
+end
+
+if cells.empty?
+  warn "No matching lockfile cells found."
+  exit 1
+end
+
+# ---- list ----------------------------------------------------------------
+
+# Bare lock paths, one per line — scriptable (e.g. piped to xargs).
+if opts[:list]
+  cells.each { |c| puts c.lock }
+  exit 0
+end
+
+# Resolve against already-installed Rubies (declared in .mise.ci.toml) — never
+# auto-installs.
+ensure_installed(cells)
+
+# ---- execute -------------------------------------------------------------
+
+# ANSI styling, but only when stdout is an interactive terminal (pipes/CI get
+# plain text). $stdout.tty? guards every escape so logs stay grep-friendly.
+TTY = $stdout.tty?
+def color(text, code)
+  TTY ? "\e[#{code}m#{text}\e[0m" : text
+end
+
+# Named SGR codes so the output below reads by intent, not magic numbers.
+BOLD       = "1"
+DIM        = "90"
+CYAN       = "36"
+BOLD_BLUE  = "1;34"
+GREEN      = "32"
+RED        = "31"
+BOLD_GREEN = "1;32"
+BOLD_RED   = "1;31"
+
+def fmt_duration(seconds)
+  seconds < 60 ? format("%.1fs", seconds) : format("%dm%02ds", (seconds / 60).to_i, (seconds % 60).to_i)
+end
+
+# Serial: cells sharing a Ruby also share that Ruby's gem home, and git-sourced
+# gems (e.g. debug) collide on .git locks when fetched concurrently.
+failures = []
+width = cells.size.to_s.length
+indent = " " * (width * 2 + 3)  # aligns the ✓/✗ under the "[n/m]" counter
+started = Time.now
+
+cells.each_with_index do |cell, i|
+  counter = color("[#{(i + 1).to_s.rjust(width)}/#{cells.size}]", BOLD_BLUE)
+  puts "#{counter} #{color('→', CYAN)} #{color(cell.label, BOLD)} #{color("(ruby #{cell.ruby})", DIM)}"
+
+  env, argv = run_mise(cell, force: opts[:force])
+  cell_started = Time.now
+  # chdir into the gem dir to match CI's working-directory (avoids stray
+  # files and keeps any .bundle/ config local to the gem).
+  ok = system(env, *argv, chdir: File.join(ROOT, cell.gem))
+  elapsed = fmt_duration(Time.now - cell_started)
+
+  if ok
+    puts "#{indent} #{color('✓', GREEN)} done #{color("in #{elapsed}", DIM)}"
+  else
+    failures << cell
+    puts "#{indent} #{color('✗', RED)} #{color("failed after #{elapsed}", RED)}"
+  end
+end
+
+total_elapsed = fmt_duration(Time.now - started)
+ok_count = cells.size - failures.size
+
+puts
+if failures.empty?
+  puts color("✓ Regenerated #{ok_count}/#{cells.size} cell(s) in #{total_elapsed}.", BOLD_GREEN)
+else
+  puts color("✗ Regenerated #{ok_count}/#{cells.size} cell(s) in #{total_elapsed}.", BOLD_RED)
+  warn color("Failed:", BOLD_RED)
+  failures.each { |c| warn color("  #{c.lock}", RED) }
+  exit 1
+end

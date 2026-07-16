@@ -34,24 +34,28 @@ RSpec.describe Sentry::Transport do
       let(:envelope) { subject.envelope_from_event(event) }
 
       it "generates correct envelope content" do
-        result, _ = subject.serialize_envelope(envelope)
+        result = nil
 
-        envelope_header, item_header, item = result.split("\n")
-        envelope_header_parsed = JSON.parse(envelope_header)
+        Timecop.freeze do |frozen_time|
+          result, _ = subject.serialize_envelope(envelope)
 
-        expect(envelope_header_parsed).to eq({
-          "event_id" => event.event_id,
-          "dsn" => Sentry::TestHelper::DUMMY_DSN,
-          "sdk" => Sentry.sdk_meta,
-          "sent_at" => Time.now.utc.iso8601,
-          "trace" => dynamic_sampling_context
-        })
+          envelope_header, item_header, item = result.split("\n")
+          envelope_header_parsed = JSON.parse(envelope_header)
 
-        expect(item_header).to eq(
-          '{"type":"event","content_type":"application/json"}'
-        )
+          expect(envelope_header_parsed).to eq({
+            "event_id" => event.event_id,
+            "dsn" => Sentry::TestHelper::DUMMY_DSN,
+            "sdk" => Sentry.sdk_meta,
+            "sent_at" => frozen_time.utc.iso8601,
+            "trace" => dynamic_sampling_context
+          })
 
-        expect(item).to eq(event.to_h.to_json)
+          expect(item_header).to eq(
+            '{"type":"event","content_type":"application/json"}'
+          )
+
+          expect(item).to eq(event.to_h.to_json)
+        end
       end
     end
 
@@ -69,24 +73,26 @@ RSpec.describe Sentry::Transport do
       let(:envelope) { subject.envelope_from_event(event) }
 
       it "generates correct envelope content" do
-        result, _ = subject.serialize_envelope(envelope)
+        Timecop.freeze do |frozen_time|
+          result, _ = subject.serialize_envelope(envelope)
 
-        envelope_header, item_header, item = result.split("\n")
-        envelope_header_parsed = JSON.parse(envelope_header)
+          envelope_header, item_header, item = result.split("\n")
+          envelope_header_parsed = JSON.parse(envelope_header)
 
-        expect(envelope_header_parsed).to eq({
-          "event_id" => event.event_id,
-          "dsn" => Sentry::TestHelper::DUMMY_DSN,
-          "sdk" => Sentry.sdk_meta,
-          "sent_at" => Time.now.utc.iso8601,
-          "trace" => dynamic_sampling_context
-        })
+          expect(envelope_header_parsed).to eq({
+            "event_id" => event.event_id,
+            "dsn" => Sentry::TestHelper::DUMMY_DSN,
+            "sdk" => Sentry.sdk_meta,
+            "sent_at" => frozen_time.utc.iso8601,
+            "trace" => dynamic_sampling_context
+          })
 
-        expect(item_header).to eq(
-          '{"type":"transaction","content_type":"application/json"}'
-        )
+          expect(item_header).to eq(
+            '{"type":"transaction","content_type":"application/json"}'
+          )
 
-        expect(item).to eq(event.to_h.to_json)
+          expect(item).to eq(event.to_h.to_json)
+        end
       end
 
       context "with profiling on transaction" do
@@ -185,7 +191,7 @@ RSpec.describe Sentry::Transport do
       end
 
       it "incudes client report in envelope" do
-        Timecop.travel(Time.now + 90) do
+        Timecop.freeze(Time.now + 90) do
           result, _ = subject.serialize_envelope(envelope)
 
           client_report_header, client_report_payload = result.split("\n").last(2)
@@ -204,6 +210,83 @@ RSpec.describe Sentry::Transport do
               ]
             }.to_json
           )
+        end
+      end
+    end
+
+    context "byte-count client outcomes" do
+      let(:log_events) do
+        3.times.map do
+          Sentry::LogEvent.new(level: :info, body: "User has logged in!")
+        end
+      end
+
+      let(:metric_events) do
+        3.times.map do
+          Sentry::MetricEvent.new(name: "my.metric", type: "counter", value: 1)
+        end
+      end
+
+      let(:log_envelope) do
+        envelope = Sentry::Envelope.new
+        envelope.add_item(
+          { type: "log", item_count: log_events.size, content_type: "application/vnd.sentry.items.log+json" },
+          { items: log_events.map(&:to_h) }
+        )
+        envelope
+      end
+
+      let(:metric_envelope) do
+        envelope = Sentry::Envelope.new
+        envelope.add_item(
+          { type: "trace_metric", item_count: metric_events.size, content_type: "application/vnd.sentry.items.trace-metric+json" },
+          { items: metric_events.map(&:to_h) }
+        )
+        envelope
+      end
+
+      describe "#record_lost_event" do
+        it "fans out into the paired byte category" do
+          subject.record_lost_event(:ratelimit_backoff, "log_item", num: 3, num_bytes: 1243)
+
+          expect(subject.discarded_events[[:ratelimit_backoff, "log_item"]]).to eq(3)
+          expect(subject.discarded_events[[:ratelimit_backoff, "log_byte"]]).to eq(1243)
+        end
+
+        it "does not record a byte category for non-byte-tracked categories" do
+          subject.record_lost_event(:ratelimit_backoff, "error", num: 1, num_bytes: 1243)
+
+          expect(subject.discarded_events.keys).to contain_exactly([:ratelimit_backoff, "error"])
+        end
+
+        it "does not record bytes when num_bytes is nil" do
+          subject.record_lost_event(:ratelimit_backoff, "log_item")
+
+          expect(subject.discarded_events.keys).to contain_exactly([:ratelimit_backoff, "log_item"])
+        end
+      end
+
+      context "when a batched log item is rate limited" do
+        before { subject.rate_limits.merge!("log_item" => Time.now + 60) }
+
+        it "records log_item count and log_byte size" do
+          log_item = log_envelope.items.first
+          subject.send_envelope(log_envelope)
+
+          expect(subject.discarded_events[[:ratelimit_backoff, "log_item"]]).to eq(3)
+          expect(subject.discarded_events[[:ratelimit_backoff, "log_byte"]]).to eq(JSON.generate(log_item.payload).bytesize)
+        end
+      end
+
+      context "when a batched trace metric item is rate limited" do
+        before { subject.rate_limits.merge!("trace_metric" => Time.now + 60) }
+
+        it "records trace_metric count and trace_metric_byte size" do
+          metric_item = metric_envelope.items.first
+          subject.send_envelope(metric_envelope)
+
+          expect(subject.discarded_events[[:ratelimit_backoff, "trace_metric"]]).to eq(3)
+          expect(subject.discarded_events[[:ratelimit_backoff, "trace_metric_byte"]]).to eq(JSON.generate(metric_item.payload).bytesize)
         end
       end
     end
@@ -342,7 +425,9 @@ RSpec.describe Sentry::Transport do
             frames: frame_list_size.times.map do |zero_based_index|
               Sentry::StacktraceInterface::Frame.new(
                 "/fake/path",
-                Sentry::Backtrace::Line.parse("app.rb:#{zero_based_index + 1}:in `/'", in_app_pattern)
+                Sentry::Backtrace::Line.parse("app.rb:#{zero_based_index + 1}:in `/'", in_app_pattern),
+                true,
+                filename_cache: Sentry::FilenameCache.new("/fake/path")
               )
             end,
           )

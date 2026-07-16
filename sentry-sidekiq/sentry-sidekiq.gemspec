@@ -13,7 +13,7 @@ Gem::Specification.new do |spec|
   spec.platform = Gem::Platform::RUBY
   spec.required_ruby_version = '>= 2.7'
   spec.extra_rdoc_files = ["README.md", "LICENSE.txt"]
-  spec.files = `git ls-files | grep -Ev '^(spec|benchmarks|examples|\.rubocop\.yml)'`.split("\n")
+  spec.files = `git ls-files | grep -Ev '^(spec|benchmarks|examples|test-matrix\.json|\.rubocop\.yml)'`.split("\n")
 
   github_root_uri = 'https://github.com/getsentry/sentry-ruby'
   spec.homepage = "#{github_root_uri}/tree/#{spec.version}/#{spec.name}"
@@ -30,6 +30,6 @@ Gem::Specification.new do |spec|
   spec.executables   = spec.files.grep(%r{^exe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "sentry-ruby", "~> 6.2.0"
+  spec.add_dependency "sentry-ruby", "~> 6.6.2"
   spec.add_dependency "sidekiq", ">= 5.0"
 end

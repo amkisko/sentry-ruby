@@ -1,4 +1,129 @@
-## Unreleased
+## 6.6.2
+
+### Bug Fixes 🐛
+
+- (metrics) Dup attributes in capture_metric by @sl0thentr0py in [#2965](https://github.com/getsentry/sentry-ruby/pull/2965)
+
+## 6.6.1
+
+### Bug Fixes 🐛
+
+- Guard TelemetryEventBuffer against re-entrant mutex acquisition by @sentry-junior in [#2964](https://github.com/getsentry/sentry-ruby/pull/2964)
+
+## 6.6.0
+
+### New Features ✨
+
+- (yabeda) Add sentry-yabeda adapter gem by @dingsdax in [#2925](https://github.com/getsentry/sentry-ruby/pull/2925)
+
+  There's a new `sentry-yabeda` gem that integrates Sentry Metrics with [Yabeda](https://github.com/yabeda-rb/yabeda).
+  Add the new gem to your `Gemfile`:
+
+  ```ruby
+  gem "sentry-yabeda"
+  ```
+
+  Initialize Sentry with metrics enabled. The Yabeda adapter registers itself automatically when `sentry-yabeda` is required — there's no extra setup:
+
+  ```ruby
+  Sentry.init do |config|
+    config.dsn = ENV["SENTRY_DSN"]
+    config.enable_metrics = true
+  end
+   ```
+
+- Add release detection from Kamal deployment by @t27duck in [#2895](https://github.com/getsentry/sentry-ruby/pull/2895)
+
+### Bug Fixes 🐛
+
+- (sidekiq) Report error when retry limit is below attempt_threshold by @marcboquet in [#2940](https://github.com/getsentry/sentry-ruby/pull/2940)
+- (specs) Stop sidekiq-scheduler after each test by @solnic in [#2897](https://github.com/getsentry/sentry-ruby/pull/2897)
+- (stacktrace) Stop leaking internal frame state into event payload by @sl0thentr0py in [#2962](https://github.com/getsentry/sentry-ruby/pull/2962)
+- (tests) Proper dummy transport clean up for hub cloning by @solnic in [#2957](https://github.com/getsentry/sentry-ruby/pull/2957)
+- (yabeda) Normalize plural Yabeda units to Sentry's singular form by @sentry-junior in [#2953](https://github.com/getsentry/sentry-ruby/pull/2953)
+- Do not overwrite baggage header contents if it already exists by @jakubsomonday in [#2896](https://github.com/getsentry/sentry-ruby/pull/2896)
+
+### Internal Changes 🔧
+
+  We made some memory performance and caching improvements with the help of pi-autoresearch. Enjoy the lower overhead!
+
+- Use FilenameCache in profilers by @sl0thentr0py in [#2919](https://github.com/getsentry/sentry-ruby/pull/2919)
+- Add FilenameCache to cache compute_filename results by @HazAT in [#2904](https://github.com/getsentry/sentry-ruby/pull/2904)
+- Optimize LineCache to reduce allocations by @HazAT in [#2903](https://github.com/getsentry/sentry-ruby/pull/2903)
+- Avoid unnecessary allocations in hot paths by @HazAT in [#2902](https://github.com/getsentry/sentry-ruby/pull/2902)
+- Optimize lowercase check in RequestInterface by @HazAT in [#2908](https://github.com/getsentry/sentry-ruby/pull/2908)
+
+## 6.5.0
+
+### New Features ✨
+
+- (otlp) Add collector_url option to OTLP integration by @sl0thentr0py in [#2887](https://github.com/getsentry/sentry-ruby/pull/2887)
+- (release-detector) Prefer HEROKU_BUILD_COMMIT over deprecated HEROKU_SLUG_COMMIT by @ericapisani in [#2886](https://github.com/getsentry/sentry-ruby/pull/2886)
+- Implement strict trace continuation by @giortzisg in [#2872](https://github.com/getsentry/sentry-ruby/pull/2872)
+
+### Bug Fixes 🐛
+
+- Do not overwrite baggage header contents if it already exists by @jakubsomonday in [#2894](https://github.com/getsentry/sentry-ruby/pull/2894)
+- (rails) Set mechanism.handled based on error handling status by @solnic in [#2892](https://github.com/getsentry/sentry-ruby/pull/2892)
+- Copy event processors on Scope#dup by @sl0thentr0py in [#2893](https://github.com/getsentry/sentry-ruby/pull/2893)
+- Map `trilogy` database adapter to `mysql` for Query Insights compatibility by @krismichalski in [#2656](https://github.com/getsentry/sentry-ruby/pull/2656)
+- Don't transform attributes in place in metrics by @sl0thentr0py in [#2883](https://github.com/getsentry/sentry-ruby/pull/2883)
+
+### Internal Changes 🔧
+
+- (transport) Handle HTTP 413 response for oversized envelopes by @sl0thentr0py in [#2885](https://github.com/getsentry/sentry-ruby/pull/2885)
+
+## 6.4.1
+
+### Bug Fixes 🐛
+
+- (rails) Track request queue time in Rails middleware by @dingsdax in [#2877](https://github.com/getsentry/sentry-ruby/pull/2877)
+
+## 6.4.0
+
+### Features
+
+- Add support for OTLP ingestion in `sentry-opentelemetry` ([#2853](https://github.com/getsentry/sentry-ruby/pull/2853))
+
+  Sentry now has first class [OTLP ingestion](https://docs.sentry.io/concepts/otlp/) capabilities.
+
+  ```ruby
+  Sentry.init do |config|
+    ## ...
+    config.otlp.enabled = true
+  end
+  ```
+
+  Under the hood, this will setup:
+  - An `OpenTelemetry::Exporter` that will automatically set up the OTLP ingestion endpoint from your DSN
+    - You can turn this off with `config.otlp.setup_otlp_traces_exporter = false` to setup your own exporter
+  - An `OTLPPropagator` that ensures Distributed Tracing works
+    - You can turn this off with `config.otlp.setup_propagator = false`
+  - Trace/Span linking for all other Sentry events such as Errors, Logs, Crons and Metrics
+
+  If you were using the `SpanProcessor` before, we recommend migrating over to `config.otlp` since it's a much simpler setup.
+
+- Treat Sidekiq nil retry as true ([#2864](https://github.com/getsentry/sentry-ruby/pull/2864))
+- Queue time capture for Rack ([#2838](https://github.com/getsentry/sentry-ruby/pull/2838))
+
+### Bug Fixes
+
+- Fix `MetricEvent` timestamp serialization to float ([#2862](https://github.com/getsentry/sentry-ruby/pull/2862))
+- Fix CGI imports for ruby 4.x ([#2863](https://github.com/getsentry/sentry-ruby/pull/2863))
+- Always include scope user data in telemetry ([#2866](https://github.com/getsentry/sentry-ruby/pull/2866))
+
+## 6.3.1
+
+### Bug Fixes
+
+- Use `ActionDispatch::ExceptionWrapper` for correct HTTP status code ([#2850](https://github.com/getsentry/sentry-ruby/pull/2850))
+- Add explicit dependency on logger gem to fix Ruby 4.0 warning ([#2837](https://github.com/getsentry/sentry-ruby/pull/2837))
+
+### Internal
+
+- Add external_propagation_context support ([#2841](https://github.com/getsentry/sentry-ruby/pull/2841))
+
+## 6.3.0
 
 ### Features
 
@@ -7,14 +132,18 @@
   The SDK now supports Sentry's new [Trace Connected Metrics](https://docs.sentry.io/product/explore/metrics/) product.
 
   ```ruby
-   Sentry.init do |config|
-     # ...
-     config.enable_metrics = true
-   end
-
    Sentry.metrics.count("button.click", 1, attributes: { button_id: "submit" })
    Sentry.metrics.distribution("response.time", 120.5, unit: "millisecond")
    Sentry.metrics.gauge("cpu.usage", 75.2, unit: "percent")
+  ```
+
+  Metrics is enabled by default and only activates once you use the above APIs. To disable completely:
+
+  ```ruby
+  Sentry.init do |config|
+    # ...
+    config.enable_metrics = false
+  end
   ```
 
 - Support for tracing `Sequel` queries ([#2814](https://github.com/getsentry/sentry-ruby/pull/2814))

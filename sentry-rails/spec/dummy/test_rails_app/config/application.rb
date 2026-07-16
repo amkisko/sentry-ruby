@@ -45,6 +45,10 @@ module Sentry
           @schema_file ||= root_path.join("db/schema.rb")
         end
 
+        def self.queue_schema_file
+          @queue_schema_file ||= root_path.join("db/queue_schema.rb")
+        end
+
         def self.db_path
           @db_path ||= root_path.join("db", "db.sqlite3")
         end
@@ -73,6 +77,14 @@ module Sentry
             # Load schema from db/schema.rb into the current connection
             require Test::Application.schema_file
 
+            true
+          end
+        end
+
+        def self.load_queue_schema
+          @__queue_schema_loaded__ ||= begin
+            load_test_schema
+            require Test::Application.queue_schema_file
             true
           end
         end
@@ -115,6 +127,7 @@ module Sentry
             get "/not_found", to: "hello#not_found"
             get "/world", to: "hello#world"
             get "/with_custom_instrumentation", to: "hello#with_custom_instrumentation"
+            get "/inline_job", to: "hello#inline_job"
 
             resources :posts, only: [:index, :show] do
               member do
@@ -143,6 +156,20 @@ module Sentry
         end
 
         def after_initialize!
+          # The active_job.custom_serializers railtie initializer calls
+          # add_serializers(app.config.active_job.custom_serializers). Under some
+          # Rails/Ruby combinations custom_serializers resolves to nil instead of the
+          # railtie default of [], inserting nil into the global serializers Set.
+          # Remove it right after initialization so it cannot affect any test.
+          # Rails < 8 uses mattr_accessor _additional_serializers; Rails 8+ uses @serializers.
+          if defined?(::ActiveJob::Serializers)
+            if ::ActiveJob::Serializers.respond_to?(:_additional_serializers)
+              ::ActiveJob::Serializers._additional_serializers.delete(nil)
+            elsif ::ActiveJob::Serializers.instance_variable_defined?(:@serializers)
+              ::ActiveJob::Serializers.instance_variable_get(:@serializers).delete(nil)
+            end
+          end
+
           if Sentry.initialized?
             # Run a query to make sure the schema metadata gets loaded and cached
             Post.all.to_a.inspect
