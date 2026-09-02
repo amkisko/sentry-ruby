@@ -224,7 +224,7 @@ module Sentry
     end
 
     def capture_log_event(message, **options)
-      return unless current_client && current_client.configuration.enable_logs
+      return unless current_client
 
       event = current_client.event_from_log(message, **options)
 
@@ -242,7 +242,7 @@ module Sentry
     # @param attributes [Hash, nil] (optional) additional attributes for the metric
     # @return [void]
     def capture_metric(name:, type:, value:, unit: nil, attributes: nil)
-      return unless current_client&.configuration.enable_metrics
+      return unless current_client
 
       metric = MetricEvent.new(
         name: name,

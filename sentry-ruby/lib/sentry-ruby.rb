@@ -277,7 +277,7 @@ module Sentry
       @background_worker = Sentry::BackgroundWorker.new(config)
       @session_flusher = config.session_tracking? ? Sentry::SessionFlusher.new(config, client) : nil
       @backpressure_monitor = config.enable_backpressure_handling ? Sentry::BackpressureMonitor.new(config, client) : nil
-      exception_locals_tp.enable if config.include_local_variables
+      exception_locals_tp.enable if config.data_collection.collect_stack_frame_variables?
       at_exit { close }
     end
 
@@ -301,7 +301,7 @@ module Sentry
         client.configuration.run_after_close_callbacks
         client.flush
 
-        if client.configuration.include_local_variables
+        if client.configuration.data_collection.collect_stack_frame_variables?
           exception_locals_tp.disable
         end
       end
@@ -527,7 +527,7 @@ module Sentry
     #   Sentry.capture_log("User logged in", level: :info, user_id: 123)
     #
     # @see https://develop.sentry.dev/sdk/telemetry/logs/ Sentry SDK Telemetry Logs Protocol
-    # @return [LogEvent, nil] The created log event or nil if logging is disabled
+    # @return [LogEvent, nil] The created log event or nil if Sentry is not initialized
     def capture_log(message, **options)
       return unless initialized?
       get_current_hub.capture_log_event(message, **options)
@@ -639,14 +639,6 @@ module Sentry
 
     # Returns the structured logger instance that implements Sentry's SDK telemetry logs protocol.
     #
-    # This logger is only available when logs are enabled in the configuration.
-    #
-    # @example Enable logs in configuration
-    #   Sentry.init do |config|
-    #     config.dsn = "YOUR_DSN"
-    #     config.enable_logs = true
-    #   end
-    #
     # @example Basic usage
     #   Sentry.logger.info("User logged in successfully", user_id: 123)
     #   Sentry.logger.error("Failed to process payment",
@@ -656,18 +648,12 @@ module Sentry
     #
     # @see https://develop.sentry.dev/sdk/telemetry/logs/ Sentry SDK Telemetry Logs Protocol
     #
-    # @return [StructuredLogger] The structured logger instance or nil if logs are disabled
+    # @return [StructuredLogger] The structured logger instance
     def logger
       @logger ||= configuration.structured_logging.logger_class.new(configuration)
     end
 
     # Returns the metrics API for capturing custom metrics.
-    #
-    # @example Enable metrics
-    #   Sentry.init do |config|
-    #     config.dsn = "YOUR_DSN"
-    #     config.enable_metrics = true
-    #   end
     #
     # @example Usage
     #   Sentry.metrics.count("button.click", 1, attributes: { button_id: "submit" })
@@ -751,10 +737,33 @@ module Sentry
     # @return [Hub, nil]
     def get_current_hub_internal
       if @hub_isolation_level == :fiber
-        ::Fiber[THREAD_LOCAL]
+        owner, hub = ::Fiber[THREAD_LOCAL]
+
+        # Child fibers, and threads started from them, inherit fiber storage
+        # holding the same Hub object rather than a copy.
+        if owner.equal?(::Fiber.current)
+          hub
+        elsif hub
+          set_current_hub_internal(fork_hub(hub))
+        end
       else
         ::Thread.current.thread_variable_get(THREAD_LOCAL)
       end
+    end
+
+    # Copies +hub+ for a context that inherited it. The span is re-attached
+    # because Scope#dup deep-copies it, and spans recorded on a detached
+    # transaction copy are never sent.
+    #
+    # @!visibility private
+    # @param hub [Hub]
+    # @return [Hub]
+    def fork_hub(hub)
+      span = hub.current_scope.span
+      forked = hub.clone
+      forked.current_scope.set_span(span) if span
+
+      forked
     end
 
     # Stores +hub+ for the current execution context (thread or fiber).
@@ -764,7 +773,8 @@ module Sentry
     # @return [Hub, nil]
     def set_current_hub_internal(hub)
       if @hub_isolation_level == :fiber
-        ::Fiber[THREAD_LOCAL] = hub
+        ::Fiber[THREAD_LOCAL] = [::Fiber.current, hub]
+        hub # callers use the return value, so don't return the pair
       else
         ::Thread.current.thread_variable_set(THREAD_LOCAL, hub)
       end

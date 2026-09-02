@@ -16,6 +16,7 @@ require "sentry/logger"
 require "sentry/structured_logger"
 require "sentry/log_event_buffer"
 require "sentry/metric_event_buffer"
+require "sentry/data_collection"
 
 module Sentry
   class Configuration
@@ -132,6 +133,7 @@ module Sentry
     attr_accessor :max_breadcrumbs
 
     # Number of lines of code context to capture, or nil for none
+    # @deprecated Use {#data_collection} and `frame_context_lines` instead.
     # @return [Integer, nil]
     attr_accessor :context_lines
 
@@ -167,8 +169,14 @@ module Sentry
     alias inspect_exception_causes_for_exclusion? inspect_exception_causes_for_exclusion
 
     # Whether to capture local variables from the raised exception's frame. Default is false.
+    # @deprecated Use {#data_collection} and `stack_frame_variables` instead.
     # @return [Boolean]
-    attr_accessor :include_local_variables
+    attr_reader :include_local_variables
+
+    def include_local_variables=(value)
+      @include_local_variables = value
+      @data_collection.backfill_stack_frame_variables(self)
+    end
 
     # Whether to capture events and traces into Spotlight. Default is false.
     # If you set this to true, Sentry will send events and traces to the local
@@ -209,6 +217,7 @@ module Sentry
     attr_accessor :propagate_traces
 
     # Array of rack env parameters to be included in the event sent to sentry.
+    # @deprecated Use `data_collection.http_headers.request` to control request data collection instead.
     # @return [Array<String>]
     attr_accessor :rack_env_whitelist
 
@@ -232,8 +241,14 @@ module Sentry
     # - request body
     # - query string
     # will not be sent to Sentry.
+    # @deprecated Use {#data_collection} instead.
     # @return [Boolean]
-    attr_accessor :send_default_pii
+    attr_reader :send_default_pii
+
+    # Controls which categories of data may be collected.
+    # Replacement for send_default_pii.
+    # @return [DataCollection]
+    attr_accessor :data_collection
 
     # Capture queue time from X-Request-Start header set by reverse proxies.
     # Works with any Rack app behind Nginx, HAProxy, Heroku router, etc.
@@ -272,10 +287,6 @@ module Sentry
     #   end
     # @return [Proc]
     attr_accessor :traces_sampler
-
-    # Enable Structured Logging
-    # @return [Boolean]
-    attr_accessor :enable_logs
 
     # Structured logging configuration.
     # @return [StructuredLoggingConfiguration]
@@ -345,10 +356,6 @@ module Sentry
     # @return [Integer]
     attr_accessor :max_log_events
 
-    # Enable metrics collection, defaults to true
-    # @return [Boolean]
-    attr_accessor :enable_metrics
-
     # Maximum number of metric events to buffer before sending
     # @return [Integer]
     attr_accessor :max_metric_events
@@ -395,9 +402,10 @@ module Sentry
     #   thread-based servers (Puma, Unicorn) and background processors (Sidekiq,
     #   Resque). Every fiber on a thread shares one hub.
     # [+:fiber+] Store the hub in Fiber Storage (Ruby 3.2+). Each fiber gets its
-    #   own hub and child fibers inherit it, so concurrent requests on a
-    #   fiber-based server (Falcon/async) are isolated instead of sharing and
-    #   corrupting one another's scope. Requested on a Ruby without Fiber
+    #   own hub, so concurrent requests on a fiber-based server (Falcon/async)
+    #   are isolated instead of sharing and corrupting one another's scope. A
+    #   fiber or thread started from another inherits its context and trace, but
+    #   its own scope changes stay local. Requested on a Ruby without Fiber
     #   Storage (< 3.2), the SDK logs a warning and falls back to +:thread+.
     #
     # @return [Symbol]
@@ -526,6 +534,7 @@ module Sentry
     def initialize
       run_callbacks(:before, :initialize)
 
+      self.data_collection = DataCollection.new
       self.app_dirs_pattern = APP_DIRS_PATTERN
       self.debug = Sentry::Utils::EnvHelper.env_to_bool(ENV["SENTRY_DEBUG"])
       self.background_worker_threads = (processor_count / 2.0).ceil
@@ -536,6 +545,7 @@ module Sentry
       self.breadcrumbs_logger = []
       self.context_lines = 3
       self.include_local_variables = false
+
       self.environment = environment_from_env
       self.enabled_environments = nil
       self.exclude_loggers = []
@@ -577,8 +587,6 @@ module Sentry
       self.std_lib_logger_filter = nil
       self.rack_env_whitelist = RACK_ENV_WHITELIST_DEFAULT
       self.traces_sampler = nil
-      self.enable_logs = false
-      self.enable_metrics = true
 
       self.profiler_class = Sentry::Profiler
       self.profiles_sample_interval = DEFAULT_PROFILES_SAMPLE_INTERVAL
@@ -594,6 +602,8 @@ module Sentry
       run_callbacks(:after, :initialize)
 
       yield(self) if block_given?
+
+      log_deprecations
 
       run_callbacks(:after, :configured)
     end
@@ -618,6 +628,11 @@ module Sentry
 
     def dsn=(value)
       @dsn = init_dsn(value)
+    end
+
+    def send_default_pii=(value)
+      @send_default_pii = value
+      self.data_collection = DataCollection.backfill(self)
     end
 
     alias server= dsn=
@@ -801,6 +816,14 @@ module Sentry
         uri += "&sentry_environment=#{CGI.escape(environment)}" if environment && !environment.empty?
         uri
       end
+    end
+
+    # @api private
+    def log_deprecations
+      log_warn("`send_default_pii` is deprecated; use `data_collection` instead.") if self.send_default_pii
+      log_warn("`include_local_variables` is deprecated; use `data_collection.stack_frame_variables` instead.") if include_local_variables
+      log_warn("`context_lines` is deprecated; use `data_collection.frame_context_lines` instead.") if context_lines != 3
+      log_warn("`rack_env_whitelist` is deprecated; use `data_collection.http_headers.request` to control request data collection instead.") if rack_env_whitelist != RACK_ENV_WHITELIST_DEFAULT
     end
 
     # @api private

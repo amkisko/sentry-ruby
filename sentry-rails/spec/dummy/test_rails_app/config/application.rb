@@ -24,11 +24,11 @@ module Sentry
 
           yield(klass) if block_given?
 
+          ::Rails.application = klass
+
           klass.before_initialize!
           klass.initialize!
           klass.after_initialize!
-
-          ::Rails.application = klass
 
           klass
         end
@@ -109,8 +109,10 @@ module Sentry
             :custom_secret,
             :api_key,
             :credit_card,
+            /billing_reference/,
             :authorization,
-            :token
+            :token,
+            proc { |_key, _value| }
           ]
 
           # Eager load namespaces can be accumulated after repeated initializations and make initialization
@@ -122,6 +124,7 @@ module Sentry
 
           routes.append do
             get "/exception", to: "hello#exception"
+            get "/exception_with_error_context", to: "hello#exception_with_error_context"
             get "/view_exception", to: "hello#view_exception"
             get "/view", to: "hello#view"
             get "/not_found", to: "hello#not_found"

@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "sentry/rails/log_subscriber"
-require "sentry/rails/log_subscribers/parameter_filter"
 
 module Sentry
   module Rails
@@ -16,13 +15,10 @@ module Sentry
       # @example Usage
       #   # Enable structured logging for ActionController
       #   Sentry.init do |config|
-      #     config.enable_logs = true
       #     config.rails.structured_logging = true
       #     config.rails.structured_logging.subscribers = { action_controller: Sentry::Rails::LogSubscribers::ActionControllerSubscriber }
       #   end
       class ActionControllerSubscriber < Sentry::Rails::LogSubscriber
-        include ParameterFilter
-
         # Handle process_action.action_controller events
         #
         # @param event [ActiveSupport::Notifications::Event] The controller action event
@@ -55,9 +51,9 @@ module Sentry
             attributes[:db_runtime_ms] = payload[:db_runtime].round(2)
           end
 
-          if Sentry.configuration.send_default_pii && payload[:params]
-            filtered_params = filter_sensitive_params(payload[:params])
-            attributes[:params] = filtered_params unless filtered_params.empty?
+          if payload[:params].is_a?(Hash)
+            params = Sentry.configuration.data_collection.url_query_params.filter(payload[:params])
+            attributes[:params] = params unless params.empty?
           end
 
           level = level_for_request(payload)

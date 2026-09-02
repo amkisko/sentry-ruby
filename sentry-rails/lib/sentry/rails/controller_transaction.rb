@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "sentry/utils/http_tracing"
+
 module Sentry
   module Rails
     module ControllerTransaction
@@ -24,9 +26,28 @@ module Sentry
                 child_span.set_data(:format, request.format)
                 child_span.set_data(:method, request.method)
 
-                pii = Sentry.configuration.send_default_pii
-                child_span.set_data(:path, pii ? request.fullpath : request.filtered_path)
-                child_span.set_data(:params, pii ? request.params : request.filtered_parameters)
+                data_collection = Sentry.configuration.data_collection
+
+                path = request.path
+                query_parameters = request.query_parameters
+
+                if query_parameters.is_a?(Hash)
+                  filtered_query_parameters = data_collection.url_query_params.filter(query_parameters)
+
+                  unless filtered_query_parameters.empty?
+                    formatted_query = Sentry::Utils::HttpTracing.format_query(filtered_query_parameters)
+                    path = "#{path}?#{formatted_query}"
+                  end
+                end
+
+                child_span.set_data(:path, path)
+
+                # all params request + body
+                params = request.params
+                if params.is_a?(Hash)
+                  filtered_params = data_collection.url_query_params.filter(params)
+                  child_span.set_data(:params, filtered_params)
+                end
               end
 
               result

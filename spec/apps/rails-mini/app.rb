@@ -68,13 +68,12 @@ class RailsMiniApp < Rails::Application
       config.sdk_logger.level = ::Logger::DEBUG
       config.sdk_logger = Sentry::Logger.new($stdout)
       config.debug = true
-      config.include_local_variables = true
+      config.data_collection.stack_frame_variables = true
       config.release = "sentry-ruby-rails-mini-#{Time.now.utc}"
       config.transport.transport_class = Sentry::DebugTransport
       config.sdk_debug_transport_log_file = debug_log_path.join("sentry_debug_events.log")
       config.background_worker_threads = 0
 
-      config.enable_logs = true
       config.structured_logging.logger_class = Sentry::DebugStructuredLogger
       config.structured_logging.file_path = debug_log_path.join("sentry_e2e_tests.log")
 

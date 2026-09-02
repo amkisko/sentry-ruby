@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "set"
+require "sentry/rails/serializer"
+require "sentry/rails/error_reporter_context"
 
 module Sentry
   module Rails
@@ -37,7 +39,7 @@ module Sentry
             sentry_data["trace_propagation_headers"] = headers if headers && !headers.empty?
           end
 
-          if Sentry.configuration.send_default_pii
+          if Sentry.configuration.data_collection.user_info
             user = Sentry.get_current_scope.user
             allowed = user.transform_keys(&:to_s).slice(*USER_FIELDS_ALLOWLIST)
             sentry_data["user"] = allowed unless allowed.empty?
@@ -70,11 +72,19 @@ module Sentry
         OP_NAME = "queue.process"
         SPAN_ORIGIN = "auto.queue.active_job"
 
+        # Emitted as messaging.system when the configured queue adapter's
+        # identity cannot be resolved from the job. ActiveJob is adapter-agnostic
+        # and supports arbitrary third-party backends, so the concrete value is
+        # normally derived from the adapter itself; this is only the last resort.
+        MESSAGING_SYSTEM_FALLBACK = "activejob"
+
         EVENT_HANDLERS = {
           "enqueue_retry.active_job" => :retry_handler
         }
 
         class << self
+          include ErrorReporterContext
+
           def producer_callback_registered?
             @producer_callback_registered ||= false
           end
@@ -97,8 +107,13 @@ module Sentry
               Sentry.with_child_span(op: "queue.publish", description: job.class.name) do |span|
                 if span
                   span.set_origin(SPAN_ORIGIN)
+                  span.set_data(Sentry::Span::DataConventions::MESSAGING_SYSTEM, messaging_system(job))
                   span.set_data(Sentry::Span::DataConventions::MESSAGING_MESSAGE_ID, job.job_id)
                   span.set_data(Sentry::Span::DataConventions::MESSAGING_DESTINATION_NAME, job.queue_name)
+
+                  if (count = retry_count(job))
+                    span.set_data(Sentry::Span::DataConventions::MESSAGING_MESSAGE_RETRY_COUNT, count)
+                  end
                 end
 
                 run_enqueue.call
@@ -169,25 +184,43 @@ module Sentry
           end
 
           def set_messaging_data(transaction, job)
+            transaction.set_data(Sentry::Span::DataConventions::MESSAGING_SYSTEM, messaging_system(job))
             transaction.set_data(Sentry::Span::DataConventions::MESSAGING_MESSAGE_ID, job.job_id)
             transaction.set_data(Sentry::Span::DataConventions::MESSAGING_DESTINATION_NAME, job.queue_name)
-            transaction.set_data(Sentry::Span::DataConventions::MESSAGING_MESSAGE_RETRY_COUNT, [job.executions.to_i - 1, 0].max)
+            if (count = retry_count(job))
+              transaction.set_data(Sentry::Span::DataConventions::MESSAGING_MESSAGE_RETRY_COUNT, count)
+            end
 
             if (latency = compute_latency(job))
               transaction.set_data(Sentry::Span::DataConventions::MESSAGING_MESSAGE_RECEIVE_LATENCY, latency)
             end
           end
 
+          def messaging_system(job)
+            name = job.class.queue_adapter_name if job.class.respond_to?(:queue_adapter_name)
+            name = name.to_s
+            name.empty? ? MESSAGING_SYSTEM_FALLBACK : name
+          end
+
+          # Number of retries the job has already gone through, as observed at
+          # the moment the span is opened. On the consumer the span opens before
+          # ActiveJob increments +executions+, so a job's first attempt reads 0,
+          # its first retry reads 1, and so on. On the producer the retry enqueue
+          # runs after the failed attempt bumped +executions+, so it observes the
+          # same progression.
+          def retry_count(job)
+            job.executions.to_i if job.respond_to?(:executions)
+          end
+
           def compute_latency(job)
             return unless job.respond_to?(:enqueued_at) && job.enqueued_at
 
             enqueued_time = job.enqueued_at.is_a?(String) ? Time.parse(job.enqueued_at) : job.enqueued_at
-            ((Time.now.to_f - enqueued_time.to_f) * 1000).round
+            (Time.now.to_f - enqueued_time.to_f) * 1000.0
           end
 
           def capture_exception(job, e)
-            Sentry::Rails.capture_exception(
-              e,
+            options = {
               extra: sentry_context(job),
               tags: {
                 job_id: job.job_id,
@@ -196,7 +229,10 @@ module Sentry
               # Send synchronously: a worker process may exit before the async
               # background worker flushes its queue, which would drop the event.
               hint: { background: false }
-            )
+            }
+            options[:contexts] = execution_context if Sentry.configuration.data_collection.queues
+
+            Sentry::Rails.capture_exception(e, **options)
           end
 
           def register_event_handlers
@@ -237,33 +273,23 @@ module Sentry
           end
 
           def sentry_context(job)
-            {
+            context = {
               active_job: job.class.name,
-              arguments: sentry_serialize_arguments(job.arguments),
               scheduled_at: job.scheduled_at,
               job_id: job.job_id,
               provider_job_id: job.provider_job_id,
               locale: job.locale
             }
+
+            if Sentry.configuration.data_collection.queues
+              context[:arguments] = sentry_serialize_arguments(job.arguments)
+            end
+
+            context
           end
 
           def sentry_serialize_arguments(argument)
-            case argument
-            when Range
-              if (argument.begin || argument.end).is_a?(ActiveSupport::TimeWithZone)
-                argument.to_s
-              else
-                argument.map { |v| sentry_serialize_arguments(v) }
-              end
-            when Hash
-              argument.transform_values { |v| sentry_serialize_arguments(v) }
-            when Array, Enumerable
-              argument.map { |v| sentry_serialize_arguments(v) }
-            when ->(v) { v.respond_to?(:to_global_id) }
-              argument.to_global_id.to_s rescue argument
-            else
-              argument
-            end
+            Sentry::Rails::Serializer.serialize(argument)
           end
 
           private

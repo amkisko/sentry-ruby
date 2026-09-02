@@ -4,10 +4,11 @@ require "spec_helper"
 
 RSpec.describe Sentry::Rails::LogSubscribers::ActiveRecordSubscriber do
   context "when logging is enabled" do
+    let(:send_default_pii) { false }
+
     before do
       make_basic_app do |config|
-        config.enable_logs = true
-
+        config.send_default_pii = send_default_pii
         config.rails.structured_logging.enabled = true
         config.rails.structured_logging.subscribers = { active_record: Sentry::Rails::LogSubscribers::ActiveRecordSubscriber }
       end
@@ -47,13 +48,7 @@ RSpec.describe Sentry::Rails::LogSubscribers::ActiveRecordSubscriber do
       end
 
       context "when send_default_pii is enabled" do
-        before do
-          Sentry.configuration.send_default_pii = true
-        end
-
-        after do
-          Sentry.configuration.send_default_pii = false
-        end
+        let(:send_default_pii) { true }
 
         it "logs SELECT queries with binds in attributes" do
           post = Post.create!(title: "test")
@@ -62,7 +57,7 @@ RSpec.describe Sentry::Rails::LogSubscribers::ActiveRecordSubscriber do
           sentry_transport.events.clear
           sentry_transport.envelopes.clear
 
-          created_at = Time.new(2025, 10, 28, 13, 11, 44)
+          created_at = Time.utc(2025, 10, 28, 13, 11, 44)
           Post.where(id: post.id, title: post.title, created_at: created_at).to_a
 
           Sentry.get_current_client.flush
@@ -77,7 +72,7 @@ RSpec.describe Sentry::Rails::LogSubscribers::ActiveRecordSubscriber do
           expect(log_event[:attributes]["db.query.parameter.title"][:value]).to eql(post.title)
           expect(log_event[:attributes]["db.query.parameter.title"][:type]).to eql("string")
 
-          expect(log_event[:attributes]["db.query.parameter.created_at"][:value]).to include("2025-10-28 13:11:44")
+          expect(log_event[:attributes]["db.query.parameter.created_at"][:value]).to include(created_at.utc.strftime("%Y-%m-%d %H:%M:%S"))
           expect(log_event[:attributes]["db.query.parameter.created_at"][:type]).to eql("string")
         end
 
@@ -350,8 +345,6 @@ RSpec.describe Sentry::Rails::LogSubscribers::ActiveRecordSubscriber do
   context "when logger is silenced" do
     before do
       make_basic_app do |config, app|
-        config.enable_logs = true
-
         config.rails.structured_logging.enabled = true
         config.rails.structured_logging.subscribers = {
           active_record: Sentry::Rails::LogSubscribers::ActiveRecordSubscriber
@@ -380,9 +373,7 @@ RSpec.describe Sentry::Rails::LogSubscribers::ActiveRecordSubscriber do
   context "when logging is disabled" do
     before do
       make_basic_app do |config|
-        config.enable_logs = false
-
-        config.rails.structured_logging.enabled = true
+        config.rails.structured_logging.enabled = false
         config.rails.structured_logging.subscribers = { active_record: Sentry::Rails::LogSubscribers::ActiveRecordSubscriber }
       end
     end
@@ -397,6 +388,4 @@ RSpec.describe Sentry::Rails::LogSubscribers::ActiveRecordSubscriber do
       expect(sentry_logs.count).to eq(initial_log_count)
     end
   end
-
-  include_examples "parameter filtering", described_class
 end

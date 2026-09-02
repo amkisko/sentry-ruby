@@ -33,7 +33,7 @@ module Sentry
       dummy_config.background_worker_threads = 0
 
       # user can overwrite some of the configs, with a few exceptions like:
-      # - include_local_variables
+      # - data_collection
       # - auto_session_tracking
       block&.call(dummy_config)
 
@@ -90,9 +90,7 @@ module Sentry
         transport.clear if transport.respond_to?(:clear)
       end
 
-      if Sentry.configuration.enable_logs && sentry_logger.respond_to?(:clear)
-        sentry_logger.clear
-      end
+      sentry_logger.clear if sentry_logger.respond_to?(:clear)
     end
 
     # @return [Sentry::StructuredLogger, Sentry::DebugStructuredLogger]

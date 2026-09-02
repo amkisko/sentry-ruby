@@ -64,11 +64,14 @@ RSpec.describe Sentry::Rails, type: :request do
       end
 
       it "doesn't cause error if Rails::Logger is not present during SDK initialization" do
+        rails_logger = Rails.logger
         Rails.logger = nil
 
         Sentry.init
 
         expect(Sentry.configuration.sdk_logger).to be_a(Sentry::Logger)
+      ensure
+        Rails.logger = rails_logger
       end
     end
 
@@ -102,6 +105,38 @@ RSpec.describe Sentry::Rails, type: :request do
       get "/exception"
 
       expect(response.request.env["sentry.error_event_id"]).to eq(event["event_id"])
+    end
+  end
+
+  context "data collection" do
+    before do
+      make_basic_app do |config, app|
+        config.data_collection.url_query_params.mode = :deny_list
+        app.config.filter_parameters << proc { |_key, _value| }
+      end
+    end
+
+    it "adds Rails filter parameters to URL query parameter data collection" do
+      expect(Sentry.configuration.data_collection.url_query_params.terms).to include(
+        "password",
+        "custom_secret"
+      )
+    end
+
+    it "preserves and applies Regexp Rails filter parameters" do
+      expect(Sentry.configuration.data_collection.url_query_params.terms).to include(/billing_reference/)
+      expect(Sentry.configuration.data_collection.url_query_params.filter(
+        { "billing_reference_id" => "secret", "public" => "visible" }
+      )).to eq(
+        "billing_reference_id" => "[Filtered]",
+        "public" => "visible"
+      )
+    end
+
+    it "only adds String, Symbol, and Regexp Rails filter parameters" do
+      terms = Sentry.configuration.data_collection.url_query_params.terms
+
+      expect(terms).to all(satisfy { |term| term.is_a?(String) || term.is_a?(Symbol) || term.is_a?(Regexp) })
     end
   end
 
@@ -331,9 +366,12 @@ RSpec.describe Sentry::Rails, type: :request do
     end
 
     context "when config.register_error_subscriber = true" do
+      let(:user_info) { false }
+
       before do
         make_basic_app do |config|
           config.rails.register_error_subscriber = true
+          config.data_collection.user_info = user_info
         end
       end
 
@@ -372,6 +410,34 @@ RSpec.describe Sentry::Rails, type: :request do
         end
 
         expect(transport.events.count).to eq(0)
+      end
+
+      it "omits Rails.error.set_context data attached before an unhandled request exception" do
+        get "/exception_with_error_context"
+
+        expect(transport.events.count).to eq(1)
+
+        expect(transport.events.first.contexts).not_to have_key("rails.error")
+      end
+
+      context "when user data collection is enabled" do
+        let(:user_info) { true }
+
+        it "includes Rails.error.set_context data attached before an unhandled request exception" do
+          get "/exception_with_error_context"
+
+          expect(transport.events.count).to eq(1)
+
+          event = transport.events.first
+          expect(event.contexts).to include(
+            "rails.error" => hash_including(
+              debug_key: "important_value",
+              timestamp: Time.utc(2026, 7, 21, 12, 34, 56),
+              zoned_timestamp: ActiveSupport::TimeZone["Eastern Time (US & Canada)"].parse("2026-07-21 12:34:56"),
+              date: Date.new(2026, 7, 21)
+            )
+          )
+        end
       end
     end
   end

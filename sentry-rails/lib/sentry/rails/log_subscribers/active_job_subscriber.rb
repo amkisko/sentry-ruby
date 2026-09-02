@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "sentry/rails/log_subscriber"
-require "sentry/rails/log_subscribers/parameter_filter"
 
 module Sentry
   module Rails
@@ -15,13 +14,10 @@ module Sentry
       # @example Usage
       #   # Enable structured logging for ActiveJob
       #   Sentry.init do |config|
-      #     config.enable_logs = true
       #     config.rails.structured_logging = true
       #     config.rails.structured_logging.subscribers = { active_job: Sentry::Rails::LogSubscribers::ActiveJobSubscriber }
       #   end
       class ActiveJobSubscriber < Sentry::Rails::LogSubscriber
-        include ParameterFilter
-
         # Handle perform.active_job events
         #
         # @param event [ActiveSupport::Notifications::Event] The job performance event
@@ -47,7 +43,7 @@ module Sentry
             attributes[:delay_ms] = ((Time.current - job.scheduled_at) * 1000).round(2)
           end
 
-          if Sentry.configuration.send_default_pii && job.arguments.present?
+          if Sentry.configuration.data_collection.queues && job.arguments.present?
             filtered_args = filter_sensitive_arguments(job.arguments)
             attributes[:arguments] = filtered_args unless filtered_args.empty?
           end
@@ -149,9 +145,11 @@ module Sentry
           arguments.map do |arg|
             case arg
             when Hash
-              filter_sensitive_params(arg)
+              # we're using url_query_params here since rails filter_parameters end up there
+              # and we don't have a dedicated queue params config yet
+              Sentry.configuration.data_collection.url_query_params.filter(arg, cookie: false)
             when String
-              arg.length > 100 ? "[FILTERED: #{arg.length} chars]" : arg
+              arg.length > 100 ? "[Filtered: #{arg.length} chars]" : arg
             else
               arg
             end

@@ -1,6 +1,98 @@
 # frozen_string_literal: true
 
 RSpec.describe Sentry::Configuration do
+  describe "#data_collection" do
+    it "allows explicit data collection configuration after enabling send_default_pii" do
+      configuration = Sentry::Configuration.new do |config|
+        config.send_default_pii = true
+        config.data_collection.user_info = false
+      end
+
+      expect(configuration.data_collection.user_info).to eq(false)
+    end
+
+    it "falls back to include_local_variables for stack frame variables" do
+      configuration = Sentry::Configuration.new do |config|
+        config.include_local_variables = true
+      end
+
+      expect(configuration.data_collection.stack_frame_variables.mode).to eq(:deny_list)
+    end
+
+    it "disables stack frame variables when include_local_variables is false" do
+      configuration = Sentry::Configuration.new do |config|
+        config.include_local_variables = false
+      end
+
+      expect(configuration.data_collection.stack_frame_variables.mode).to eq(:off)
+    end
+
+    it "treats nil include_local_variables as disabled" do
+      configuration = Sentry::Configuration.new do |config|
+        config.include_local_variables = nil
+      end
+
+      expect(configuration.data_collection.stack_frame_variables.mode).to eq(:off)
+    end
+
+    it "only backfills stack frame variables when include_local_variables changes" do
+      configuration = Sentry::Configuration.new do |config|
+        config.data_collection.user_info = true
+        config.include_local_variables = true
+      end
+
+      expect(configuration.data_collection.user_info).to eq(true)
+      expect(configuration.data_collection.stack_frame_variables.mode).to eq(:deny_list)
+    end
+
+    it "preserves include_local_variables when send_default_pii is set later" do
+      configuration = Sentry::Configuration.new do |config|
+        config.include_local_variables = true
+        config.send_default_pii = true
+      end
+
+      expect(configuration.data_collection.stack_frame_variables.mode).to eq(:deny_list)
+    end
+  end
+
+  describe "deprecated configuration warnings" do
+    it "warns when send_default_pii is enabled" do
+      allow(subject).to receive(:log_warn)
+      subject.send_default_pii = true
+
+      subject.send(:log_deprecations)
+
+      expect(subject).to have_received(:log_warn).with("`send_default_pii` is deprecated; use `data_collection` instead.")
+    end
+
+    it "warns when include_local_variables is enabled" do
+      allow(subject).to receive(:log_warn)
+      subject.include_local_variables = true
+
+      subject.send(:log_deprecations)
+
+      expect(subject).to have_received(:log_warn).with("`include_local_variables` is deprecated; use `data_collection.stack_frame_variables` instead.")
+    end
+
+    it "warns when context_lines is changed" do
+      allow(subject).to receive(:log_warn)
+      subject.context_lines = 4
+
+      subject.send(:log_deprecations)
+
+      expect(subject).to have_received(:log_warn).with("`context_lines` is deprecated; use `data_collection.frame_context_lines` instead.")
+    end
+
+    it "warns when rack_env_whitelist is changed" do
+      allow(subject).to receive(:log_warn)
+      subject.rack_env_whitelist = ["REMOTE_ADDR"]
+
+      subject.send(:log_deprecations)
+
+      expect(subject).to have_received(:log_warn).with("`rack_env_whitelist` is deprecated; use `data_collection.http_headers.request` to control request data collection instead.")
+    end
+  end
+
   describe "#background_worker_threads" do
     it "sets to have of the processors count" do
       allow_any_instance_of(Sentry::Configuration).to receive(:processor_count).and_return(8)
@@ -816,17 +908,6 @@ RSpec.describe Sentry::Configuration do
       expect { subject.trace_ignore_status_codes = [[500, 400]] }.to raise_error(ArgumentError, /must be.* begin <= end/)
       expect { subject.trace_ignore_status_codes = [[99, 200]] }.to raise_error(ArgumentError, /must be.* between \(100-599\)/)
       expect { subject.trace_ignore_status_codes = [[400, 600]] }.to raise_error(ArgumentError, /must be.* between \(100-599\)/)
-    end
-  end
-
-  describe "#enable_metrics" do
-    it "returns true by default" do
-      expect(subject.enable_metrics).to eq(true)
-    end
-
-    it "can be set to false" do
-      subject.enable_metrics = false
-      expect(subject.enable_metrics).to eq(false)
     end
   end
 

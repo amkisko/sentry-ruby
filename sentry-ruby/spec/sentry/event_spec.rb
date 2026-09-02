@@ -98,24 +98,21 @@ RSpec.describe Sentry::Event do
         scope.apply_to_event(event)
 
         expect(event.to_h[:request]).to eq(
-          env: { 'SERVER_NAME' => 'localhost', 'SERVER_PORT' => '80' },
-          headers: { 'Host' => 'localhost', 'X-Request-Id' => 'abcd-1234-abcd-1234' },
+          env: { 'REMOTE_ADDR' => '[Filtered]', 'SERVER_NAME' => 'localhost', 'SERVER_PORT' => '80' },
+          headers: { 'Host' => 'localhost', 'X-Forwarded-For' => '[Filtered]', 'X-Request-Id' => 'abcd-1234-abcd-1234' },
           method: 'POST',
           url: 'http://localhost/lol',
+          cookies: {}
         )
         expect(event.to_h[:tags][:request_id]).to eq("abcd-1234-abcd-1234")
         expect(event.to_h[:user][:ip_address]).to eq(nil)
       end
 
-      it "removes ip address headers" do
+      it "filters ip address headers from headers and env" do
         scope.apply_to_event(event)
 
-        # doesn't affect scope's rack_env
-        expect(scope.rack_env).to include("REMOTE_ADDR")
-        expect(event.request.headers.keys).not_to include("REMOTE_ADDR")
-        expect(event.request.headers.keys).not_to include("Client-Ip")
-        expect(event.request.headers.keys).not_to include("X-Real-Ip")
-        expect(event.request.headers.keys).not_to include("X-Forwarded-For")
+        expect(event.request.env).to include("REMOTE_ADDR" => "[Filtered]")
+        expect(event.request.headers).to include("X-Forwarded-For" => "[Filtered]")
       end
     end
 
@@ -132,7 +129,7 @@ RSpec.describe Sentry::Event do
           env: { 'SERVER_NAME' => 'localhost', 'SERVER_PORT' => '80', "REMOTE_ADDR" => "192.168.1.1" },
           headers: { 'Host' => 'localhost', "X-Forwarded-For" => "1.1.1.1, 2.2.2.2", "X-Request-Id" => "abcd-1234-abcd-1234" },
           method: 'POST',
-          query_string: 'biz=baz',
+          query_string: { 'biz' => 'baz' },
           url: 'http://localhost/lol',
           cookies: {}
         )
@@ -160,7 +157,7 @@ RSpec.describe Sentry::Event do
             env: { 'SERVER_NAME' => 'localhost', 'SERVER_PORT' => '80', "REMOTE_ADDR" => "192.168.1.1" },
             headers: { 'Host' => 'localhost', "X-Forwarded-For" => "1.1.1.1, 2.2.2.2", "X-Request-Id" => "abcd-1234-abcd-1234" },
             method: 'POST',
-            query_string: 'biz=baz',
+            query_string: { 'biz' => 'baz' },
             url: 'http://localhost/lol',
             cookies: {}
           )
@@ -168,6 +165,30 @@ RSpec.describe Sentry::Event do
           expect(event.to_h[:tags][:request_id]).to eq("abcd-1234-abcd-1234")
           expect(event.to_h[:user][:ip_address]).to eq("1.1.1.1")
         end
+      end
+    end
+
+    context "data collection" do
+      it "does not auto-populate user information when user_info is disabled" do
+        Sentry.configuration.data_collection.user_info = false
+        Sentry.get_current_scope.apply_to_event(event)
+
+        expect(event.to_h[:user][:ip_address]).to be_nil
+      end
+
+      it "auto-populates user information when user_info is enabled" do
+        Sentry.configuration.data_collection.user_info = true
+        Sentry.get_current_scope.apply_to_event(event)
+
+        expect(event.to_h[:user][:ip_address]).to eq("2.2.2.2")
+      end
+
+      it "preserves explicitly set user data set on the scope even when user_info is disabled" do
+        Sentry.configuration.data_collection.user_info = false
+        Sentry.set_user(id: "user-1", username: "alice")
+        Sentry.get_current_scope.apply_to_event(event)
+
+        expect(event.to_h[:user]).to include(id: "user-1", username: "alice")
       end
     end
   end
