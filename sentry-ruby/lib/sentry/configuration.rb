@@ -135,7 +135,12 @@ module Sentry
     # Number of lines of code context to capture, or nil for none
     # @deprecated Use {#data_collection} and `frame_context_lines` instead.
     # @return [Integer, nil]
-    attr_accessor :context_lines
+    attr_reader :context_lines
+
+    def context_lines=(value)
+      @context_lines = value
+      @data_collection.backfill_frame_context_lines(self)
+    end
 
     # RACK_ENV by default.
     # @return [String]
@@ -416,7 +421,7 @@ module Sentry
 
     # these are not config options
     # @!visibility private
-    attr_reader :errors, :gem_specs
+    attr_reader :gem_specs
 
     # These exceptions could enter Puma's `lowlevel_error_handler` callback and the SDK's Puma integration
     # But they are mostly considered as noise and should be ignored by default
@@ -442,7 +447,7 @@ module Sentry
       SERVER_PORT
     ].freeze
 
-    TRACE_IGNORE_STATUS_CODES_DEFAULT = [(301..303), (305..399), (401..404)]
+    TRACE_IGNORE_STATUS_CODES_DEFAULT = [301, (305..399), (401..404)]
 
     HEROKU_DYNO_METADATA_MESSAGE = "You are running on Heroku but haven't enabled Dyno Metadata. For Sentry's "\
     "release detection to work correctly, please run `heroku labs:enable runtime-dyno-metadata`"
@@ -759,9 +764,7 @@ module Sentry
     end
 
     def sending_to_dsn_allowed?
-      @errors = []
-
-      valid? && capture_in_environment?
+      !!@dsn&.valid? && enabled_in_current_env?
     end
 
     def sample_allowed?
@@ -832,7 +835,7 @@ module Sentry
         project_root: @project_root.to_s,
         app_dirs_pattern: @app_dirs_pattern,
         linecache: @linecache,
-        context_lines: @context_lines,
+        context_lines: @data_collection.frame_context_lines,
         backtrace_cleanup_callback: @backtrace_cleanup_callback,
         strip_backtrace_load_path: @strip_backtrace_load_path
       )
@@ -849,12 +852,6 @@ module Sentry
       end
     rescue => e
       log_error("Error detecting release", e, debug: debug)
-    end
-
-    # @api private
-    def error_messages
-      @errors = [@errors[0]] + @errors[1..-1].map(&:downcase) # fix case of all but first
-      @errors.join(", ")
     end
 
     # @api private
@@ -901,22 +898,6 @@ module Sentry
       Object.const_get(x)
     rescue NameError # There's no way to safely ask if a constant exist for an unknown string
       nil
-    end
-
-    def capture_in_environment?
-      return true if enabled_in_current_env?
-
-      @errors << "Not configured to send/capture in environment '#{environment}'"
-      false
-    end
-
-    def valid?
-      if @dsn&.valid?
-        true
-      else
-        @errors << "DSN not set or not valid"
-        false
-      end
     end
 
     def environment_from_env

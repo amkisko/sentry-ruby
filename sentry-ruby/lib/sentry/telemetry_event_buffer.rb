@@ -12,7 +12,10 @@ module Sentry
   #
   # @!visibility private
   class TelemetryEventBuffer < ThreadedPeriodicWorker
+    include CallbackHelper
+
     FLUSH_INTERVAL = 5 # seconds
+    FLUSH_TIMEOUT = 2 # seconds
 
     # @!visibility private
     attr_reader :pending_items, :envelope_type, :data_category, :thread
@@ -21,6 +24,7 @@ module Sentry
       super(configuration.sdk_logger, FLUSH_INTERVAL)
 
       @client = client
+      @configuration = configuration
       @dsn = configuration.dsn
       @debug = configuration.debug
       @event_class = event_class
@@ -38,39 +42,44 @@ module Sentry
     end
 
     def flush
-      @mutex.synchronize do
-        return if empty?
+      return unless thread&.alive? && wake
 
-        log_debug("[#{self.class}] flushing #{size} #{@event_class}")
-
-        send_items
-      end
-
-      self
+      wait_until_idle(FLUSH_TIMEOUT)
     end
-    alias_method :run, :flush
+
+    def run
+      flush_pending_items
+    end
 
     def add_item(item)
+      # the buffer thread can never add telemetry itself to prevent recursion
+      return self if Thread.current == thread
+      return unless ensure_thread
+
       # Prevent ThreadError from re-entrant locking (e.g. transport instrumentation calling Sentry.metrics.*)
       return self if @mutex.owned?
 
-      @mutex.synchronize do
-        return unless ensure_thread
-
+      dropped = false
+      size_exceeded = @mutex.synchronize do
         if size >= @max_items_before_drop
-          log_debug("[#{self.class}] exceeded max capacity, dropping event")
-          @client.transport.record_lost_event(
-            :queue_overflow,
-            @data_category,
-            num_bytes: JSON.generate(item.to_h).bytesize
-          )
+          dropped = true
         else
           @pending_items << item
         end
 
-        send_items if size >= @max_items
+        size >= @max_items
       end
 
+      if dropped
+        log_debug("[#{self.class}] exceeded max capacity, dropping event")
+        @client.transport.record_lost_event(
+          :queue_overflow,
+          @data_category,
+          num_bytes: JSON.generate(item.to_h).bytesize
+        )
+      end
+
+      wake if size_exceeded
       self
     end
 
@@ -88,21 +97,40 @@ module Sentry
 
     private
 
-    def send_items
-      envelope = Envelope.new(
-        event_id: Sentry::Utils.uuid,
-        sent_at: Sentry.utc_now.iso8601,
-        dsn: @dsn,
-        sdk: Sentry.sdk_meta
-      )
+    def reset_if_forked
+      return unless super
+
+      # Discard items inherited from the parent to avoid duplicate delivery.
+      @mutex = Mutex.new
+      @pending_items = []
+    end
+
+    def flush_pending_items
+      pending_items = @mutex.synchronize do
+        next if @pending_items.empty?
+
+        items = @pending_items
+        @pending_items = []
+        items
+      end
+
+      return unless pending_items
+
+      log_debug("[#{self.class}] flushing #{pending_items.size} #{@event_class}")
+      send_items(pending_items)
+      self
+    end
+
+    def send_items(pending_items)
+      envelope = Envelope.new(sent_at: Sentry.utc_now.iso8601)
 
       discarded_count = 0
       discarded_bytes = 0
       envelope_items = []
 
-      if @before_send
-        @pending_items.each do |item|
-          processed_item = @before_send.call(item)
+      if callback = @configuration.send(@before_send)
+        pending_items.each do |item|
+          processed_item = safe_dispatch_callback(@before_send.to_s, callback, [item])
 
           if processed_item
             envelope_items << processed_item.to_h
@@ -112,7 +140,7 @@ module Sentry
           end
         end
       else
-        envelope_items = @pending_items.map(&:to_h)
+        envelope_items = pending_items.map(&:to_h)
       end
 
       unless discarded_count.zero?
@@ -133,8 +161,6 @@ module Sentry
       @client.send_envelope(envelope)
     rescue => e
       log_error("[#{self.class}] Failed to send #{@event_class}", e, debug: @debug)
-    ensure
-      clear!
     end
   end
 end

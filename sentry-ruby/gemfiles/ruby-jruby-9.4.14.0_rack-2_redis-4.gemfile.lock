@@ -6,7 +6,7 @@ GIT
 PATH
   remote: ..
   specs:
-    sentry-ruby (7.0.0)
+    sentry-ruby (7.2.0)
       bigdecimal
       concurrent-ruby (~> 1.0, >= 1.0.2)
       logger
@@ -14,23 +14,23 @@ PATH
 GEM
   remote: https://rubygems.org/
   specs:
-    activemodel (7.2.3.2)
-      activesupport (= 7.2.3.2)
-    activerecord (7.2.3.2)
-      activemodel (= 7.2.3.2)
-      activesupport (= 7.2.3.2)
+    activemodel (7.2.4)
+      activesupport (= 7.2.4)
+    activerecord (7.2.4)
+      activemodel (= 7.2.4)
+      activesupport (= 7.2.4)
       timeout (>= 0.4.0)
     activerecord-jdbc-adapter (72.1-java)
       activerecord (~> 7.2.2)
     activerecord-jdbcmysql-adapter (72.1-java)
       activerecord-jdbc-adapter (= 72.1)
       jdbc-mysql (>= 5.1.36, < 9)
-    activesupport (7.2.3.2)
+    activesupport (7.2.4)
       base64
       benchmark (>= 0.3)
       bigdecimal
       concurrent-ruby (~> 1.0, >= 1.3.1)
-      connection_pool (>= 2.2.5)
+      connection_pool (>= 2.2.5, < 3)
       drb
       i18n (>= 1.6, < 2)
       logger (>= 1.4.2)
@@ -48,61 +48,70 @@ GEM
     benchmark-memory (0.1.2)
       memory_profiler (~> 0.9)
     benchmark_driver (0.16.5)
-    bigdecimal (4.1.2-java)
+    bigdecimal (4.1.3-java)
     cgi (0.5.2-java)
     concurrent-ruby (1.3.8)
     connection_pool (2.5.5)
     crack (1.0.1)
       bigdecimal
       rexml
-    date (3.5.1-java)
+    date (3.6.0-java)
     diff-lcs (1.6.2)
     docile (1.4.1)
     drb (2.2.3)
     erb (4.0.4.1-java)
       cgi (>= 0.3.3)
+    et-orbi (1.4.2)
+      tzinfo
     excon (1.6.0)
       logger
-    faraday (2.14.3)
-      faraday-net_http (>= 2.0, < 3.5)
+    faraday (2.15.1)
+      faraday-net_http (>= 2.0, < 3.6)
       json
       logger
-    faraday-net_http (3.4.4)
+    faraday-net_http (3.5.0)
       net-http (~> 0.5)
     fiber-storage (1.0.1)
-    graphql (2.6.10)
+    fugit (1.14.0)
+      et-orbi (~> 1.4)
+      raabro (~> 1.4)
+    graphql (2.6.13)
       base64
       fiber-storage
       logger
     hashdiff (1.2.1)
     i18n (1.15.2)
       concurrent-ruby (~> 1.0)
-    io-console (0.9.2-java)
+    io-console (0.9.5-java)
     irb (1.18.0)
       pp (>= 0.6.0)
       prism (>= 1.3.0)
       rdoc (>= 4.0.0)
       reline (>= 0.4.2)
-    jar-dependencies (0.5.7)
+    jar-dependencies (0.6.1-java)
     jdbc-mysql (8.4.0.1)
     jdbc-sqlite3 (3.46.1.1)
-    json (2.21.2-java)
+    json (3.1.0-java)
     logger (1.7.0)
     memory_profiler (0.9.14)
     minitest (5.27.0)
-    net-http (0.9.1)
+    net-http (0.10.0)
+      net-protocol (>= 0.3.0)
       uri (>= 0.11.1)
+    net-protocol (0.4.0)
+      timeout
     nio4r (2.7.5-java)
     pp (0.6.4)
       prettyprint
-    prettyprint (0.2.0)
-    prism (1.9.0)
+    prettyprint (0.2.1)
+    prism (2.1.0)
     psych (5.5.0-java)
       date
       jar-dependencies (>= 0.1.7)
     public_suffix (6.0.2)
     puma (8.0.2-java)
       nio4r (~> 2.0)
+    raabro (1.5.0)
     rack (2.2.24)
     rake (12.3.3)
     rdoc (7.2.0)
@@ -128,8 +137,10 @@ GEM
     rspec-retry (0.6.2)
       rspec-core (> 3.3)
     rspec-support (3.13.7)
+    rufus-scheduler (3.9.2)
+      fugit (~> 1.1, >= 1.11.1)
     securerandom (0.4.1)
-    sequel (5.107.0)
+    sequel (5.109.0)
       bigdecimal
     simplecov (0.22.0)
       docile (~> 1.1)
@@ -145,8 +156,8 @@ GEM
     tsort (0.2.0)
     tzinfo (2.0.6)
       concurrent-ruby (~> 1.0)
-    uri (1.1.1)
-    webmock (3.26.4)
+    uri (1.1.2)
+    webmock (3.34.0)
       addressable (>= 2.8.0)
       crack (>= 0.3.2)
       hashdiff (>= 0.4.0, < 2.0.0)
@@ -166,6 +177,7 @@ DEPENDENCIES
   debug!
   excon
   faraday
+  fugit
   graphql (>= 2.2.6)
   irb
   jar-dependencies
@@ -177,6 +189,7 @@ DEPENDENCIES
   rexml (= 3.4.1)
   rspec
   rspec-retry
+  rufus-scheduler
   sentry-ruby!
   sequel
   simplecov
@@ -188,11 +201,11 @@ DEPENDENCIES
   yard
 
 CHECKSUMS
-  activemodel (7.2.3.2) sha256=3777c67cd8dd1560f30387523013dacb370a0a1cf532037410887819e4416927
-  activerecord (7.2.3.2) sha256=e62d24ba7e5f820d24ed122eb9225491b0aaa8398778783b400067c3467285c7
+  activemodel (7.2.4) sha256=c6a2f2290fdf8728b596fba1fc528e65852c6e015ccc385ddf0f93c455588773
+  activerecord (7.2.4) sha256=b3549deb6a4c469e0cb652194cf566b6010f1f1796404b4213d8b47469d411e5
   activerecord-jdbc-adapter (72.1-java) sha256=4487cb4606b5d76913b5abaaf681ef21b7aa9478ed201918f48da6b3f7fcec70
   activerecord-jdbcmysql-adapter (72.1-java) sha256=094d6e074e23668dff143f5c69cda0f0fc29468d9634b3c5e5884a3345e3d166
-  activesupport (7.2.3.2) sha256=ddc90d11dd88086d78ace03407fe3c2a3f5c8853c3c3046313db5ed823ef3312
+  activesupport (7.2.4) sha256=b97027b31e111675dba67b86edcd589acc25a0dddf8eecacca18d33a703a0788
   addressable (2.9.0) sha256=7fdf6ac3660f7f4e867a0838be3f6cf722ace541dd97767fa42bc6cfa980c7af
   base64 (0.3.0) sha256=27337aeabad6ffae05c265c450490628ef3ebd4b67be58257393227588f5a97b
   benchmark (0.5.0) sha256=465df122341aedcb81a2a24b4d3bd19b6c67c1530713fd533f3ff034e419236c
@@ -200,40 +213,44 @@ CHECKSUMS
   benchmark-ipsa (0.2.0) sha256=8be4820765d575691b2f91f6c988a8a3d90393239bf9d35ea53c8ab0fbca7230
   benchmark-memory (0.1.2) sha256=aa7bfe6776174d0ddefe6fb39945d88fff6d76eac165690188391d9acd441c87
   benchmark_driver (0.16.5) sha256=f675df0fe1de7e18e40df313ae24ebe4c7ee7814a4165f29a1a37b863a685831
-  bigdecimal (4.1.2-java) sha256=ccc836eab720a525529f70ed0de26a206fdbc9a9e8ac67b3b4ac7318b03e114d
+  bigdecimal (4.1.3-java) sha256=9a6a1fa67723a27ab1b3a6d5526322d8c82170af03199da7c915b8d9a1770532
   cgi (0.5.2-java) sha256=08bbfe06e10e771d36f10db6c1dfb81727ea2a25c3dbcd28d890a1794414a73d
   concurrent-ruby (1.3.8) sha256=b2f1be836e968ccc78ccfce277ea79c72a88633f22306782c16ff23fb415d1e1
   connection_pool (2.5.5) sha256=e54ff92855753df1fd7c59fa04a398833355f27dd14c074f8c83a05f72a716ad
   crack (1.0.1) sha256=ff4a10390cd31d66440b7524eb1841874db86201d5b70032028553130b6d4c7e
-  date (3.5.1-java) sha256=12e09477dc932afe45bf768cd362bf73026804e0db1e6c314186d6cd0bee3344
+  date (3.6.0-java) sha256=7276986bbacc2357d0c6d41a863be5906e2f745ea2ccb47eed84bf761f6a7806
   diff-lcs (1.6.2) sha256=9ae0d2cba7d4df3075fe8cd8602a8604993efc0dfa934cff568969efb1909962
   docile (1.4.1) sha256=96159be799bfa73cdb721b840e9802126e4e03dfc26863db73647204c727f21e
   drb (2.2.3) sha256=0b00d6fdb50995fe4a45dea13663493c841112e4068656854646f418fda13373
   erb (4.0.4.1-java) sha256=3e4805edebd25f48cdb43ad4ebf1d61c11538f29373f0a48716b688819e3f7ce
+  et-orbi (1.4.2) sha256=bb555dae668419cb24caa2a293a170e58be6d4df1e017c51f5030bdc133cd20c
   excon (1.6.0) sha256=ebe2ab83c055ef8e117c62c91a3535b966a59a64868188219d49ab90cd83b65f
-  faraday (2.14.3) sha256=1882247e6766615c8220b4392bf1d27f6ebb63d8e28267587cef1fb0bf37f278
-  faraday-net_http (3.4.4) sha256=0e78af151747ed1b00f33e25973b4bc220d7f16c00c39676817c8b12331eb588
+  faraday (2.15.1) sha256=8708154deda739c5e86cc42b74960e23e8491fce0eba9e11639a6a34b1ac288f
+  faraday-net_http (3.5.0) sha256=2e7094c34e38754ee048cc3df47376f8657005d9375f8473bce1c3b526a22e36
   fiber-storage (1.0.1) sha256=f48e5b6d8b0be96dac486332b55cee82240057065dc761c1ea692b2e719240e1
-  graphql (2.6.10) sha256=9b7c8633767f516ff9d48a8d6305b2a00a2101c82aa871b92e69086944f9f83e
+  fugit (1.14.0) sha256=e311a9cc85a54bb67649df45060e721282a1e2c8ebad40e41874a3a7d576f37e
+  graphql (2.6.13) sha256=8d3eafbc61767203e66be2eececc28900a3700be1f16706810820c1c2d24a187
   hashdiff (1.2.1) sha256=9c079dbc513dfc8833ab59c0c2d8f230fa28499cc5efb4b8dd276cf931457cd1
   i18n (1.15.2) sha256=00f9eb62412fe593b2a65a97daa75300d37abb8f7202ec748e94b6d46a9dd1b5
-  io-console (0.9.2-java) sha256=929c09163ad227cda17f5dc57861b995dbecf69c7ca2ce7b0c5f941f1f3da7d3
+  io-console (0.9.5-java) sha256=34b74ec7d8e39a526fb9a82aa34853257a1baa08f56c5cd5d37ec6be2a5e6000
   irb (1.18.0) sha256=de9454a0703a54704b9811a5ef31a60c86949fbf4013fcf244fabc7c775248e3
-  jar-dependencies (0.5.7) sha256=013ce5f4639414ac8cf1169cdbe763da164b81e2d2c983d11042b5ff7bfcce80
+  jar-dependencies (0.6.1-java) sha256=2746643482d139fd9cecb524b57df63b71d9b5d734c7275171701201e3164f23
   jdbc-mysql (8.4.0.1) sha256=429cb7999d11c4f46a7153a382b6ac07935a4c10ddc52dd98e2d52b22c17fa13
   jdbc-sqlite3 (3.46.1.1) sha256=2498fea7d37c0d51c6bad1b95ffc909173c014ba6bd36825f37910113d0230cf
-  json (2.21.2-java) sha256=f01521cd90639cc26b63040fb00d2b949f18f41ecaab5c82b02fb31d0b8b736c
+  json (3.1.0-java) sha256=5052301b8f7fa676608d9470da9cde02931a9824e02f462b635d07bf2fcc5bfc
   logger (1.7.0) sha256=196edec7cc44b66cfb40f9755ce11b392f21f7967696af15d274dde7edff0203
   memory_profiler (0.9.14) sha256=de558cf6525d8d56d2c0ea465b1664517fbe45560f892dc7a898d3b8c2863b12
   minitest (5.27.0) sha256=2d3b17f8a36fe7801c1adcffdbc38233b938eb0b4966e97a6739055a45fa77d5
-  net-http (0.9.1) sha256=25ba0b67c63e89df626ed8fac771d0ad24ad151a858af2cc8e6a716ca4336996
+  net-http (0.10.0) sha256=1a2ff6e37a05724973c43f2bf7bf105f59c36a4cd0a7e9b1c021a0a566987c27
+  net-protocol (0.4.0) sha256=f9f90c8c6f64794a45160bf422177a336db12809de3beeeaa26b88fcd2e8c853
   nio4r (2.7.5-java) sha256=d14779d2a9b012ec0148a53344fbb2ed2a3c4d90c5dd923bf281135ab983b2c9
   pp (0.6.4) sha256=dfcb0fce700c41456265922884f9fe195d7fbb0674a3578e6c0f69588e82b570
-  prettyprint (0.2.0) sha256=2bc9e15581a94742064a3cc8b0fb9d45aae3d03a1baa6ef80922627a0766f193
-  prism (1.9.0) sha256=7b530c6a9f92c24300014919c9dcbc055bf4cdf51ec30aed099b06cd6674ef85
+  prettyprint (0.2.1) sha256=d555d57ea6d7cf001d4774b693546a6bd88bec1e778ddffb5c60b68ceec4b7d4
+  prism (2.1.0) sha256=1c0a7c6dea0e93183390fb123f007564dbe663198e2f86ad87204151147601f3
   psych (5.5.0-java) sha256=3b7cf3684c44d049c3dee87ec4118ec9cd6ac714cbdcfba386997f96dbbd36ab
   public_suffix (6.0.2) sha256=bfa7cd5108066f8c9602e0d6d4114999a5df5839a63149d3e8b0f9c1d3558394
   puma (8.0.2-java) sha256=37392e0dbd01e2a157748b92b818bfacf801bb32628e41680e9ab1171dea2b3d
+  raabro (1.5.0) sha256=3f998a7bc84f9c84df3ab580634d2e0a5bda4f0841168d56035f529c9877440a
   rack (2.2.24) sha256=ef16526a0d871c43753452338c754040a664c8b41bf0dd7450b85f7772adca5f
   rake (12.3.3) sha256=f7694adb4fe638da35452300cee6c545e9c377a0e3190018ac04d590b3c26ab3
   rdoc (7.2.0) sha256=8650f76cd4009c3b54955eb5d7e3a075c60a57276766ebf36f9085e8c9f23192
@@ -246,9 +263,10 @@ CHECKSUMS
   rspec-mocks (3.13.8) sha256=086ad3d3d17533f4237643de0b5c42f04b66348c28bf6b9c2d3f4a3b01af1d47
   rspec-retry (0.6.2) sha256=6101ba23a38809811ae3484acde4ab481c54d846ac66d5037ccb40131a60d858
   rspec-support (3.13.7) sha256=0640e5570872aafefd79867901deeeeb40b0c9875a36b983d85f54fb7381c47c
+  rufus-scheduler (3.9.2) sha256=55fa9e4db0ff69d7f38c804f17baba0c9bce5cba39984ae3c5cf6c039d1323b9
   securerandom (0.4.1) sha256=cc5193d414a4341b6e225f0cb4446aceca8e50d5e1888743fac16987638ea0b1
-  sentry-ruby (7.0.0)
-  sequel (5.107.0) sha256=019629313205295b007f6df2c5eab19ddc40710d549fd445ac300f2853a370db
+  sentry-ruby (7.2.0)
+  sequel (5.109.0) sha256=e0d1d474442d620c8497d7f4851c0cc3a277920519051b8014b2877aa55efffe
   simplecov (0.22.0) sha256=fe2622c7834ff23b98066bb0a854284b2729a569ac659f82621fc22ef36213a5
   simplecov-cobertura (3.2.0) sha256=70d702658677fcb20e5aceb6915ccf8bc62ff2ccd38b62b3ad5c9db5c0888740
   simplecov-html (0.13.2) sha256=bd0b8e54e7c2d7685927e8d6286466359b6f16b18cb0df47b508e8d73c777246
@@ -257,8 +275,8 @@ CHECKSUMS
   timeout (0.6.1) sha256=78f57368a7e7bbadec56971f78a3f5ecbcfb59b7fcbb0a3ed6ddc08a5094accb
   tsort (0.2.0) sha256=9650a793f6859a43b6641671278f79cfead60ac714148aabe4e3f0060480089f
   tzinfo (2.0.6) sha256=8daf828cc77bcf7d63b0e3bdb6caa47e2272dcfaf4fbfe46f8c3a9df087a829b
-  uri (1.1.1) sha256=379fa58d27ffb1387eaada68c749d1426738bd0f654d812fcc07e7568f5c57c6
-  webmock (3.26.4) sha256=8d8da206d217ebe6968cfb09c77f4533c23074e1432bad865f3994eacbaad50d
+  uri (1.1.2) sha256=89292e98eabbef6248b0a0ed5e7e398e152f83f17560023a6d94a7f492b169fb
+  webmock (3.34.0) sha256=72eed29dc8c00148d592acaedaaa6b869e2e397de57dfc8602b84aa834f46b33
   webrick (1.9.2) sha256=beb4a15fc474defed24a3bda4ffd88a490d517c9e4e6118c3edce59e45864131
   yard (0.9.45) sha256=52e211493f7cb8a3ebf7e104a25a1e73937a3103092545d34cb88fafebb3dc51
 

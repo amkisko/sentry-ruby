@@ -1,3 +1,85 @@
+## 7.2.0
+
+### New Features ✨
+
+#### Crons
+
+- Add Solid Queue recurring task monitoring by @wedamija, @claude and @sl0thentr0py in [#3140](https://github.com/getsentry/sentry-ruby/pull/3140)
+- Add rufus-scheduler cron monitoring by @wedamija in [#3110](https://github.com/getsentry/sentry-ruby/pull/3110)
+
+### Bug Fixes 🐛
+
+#### Rails
+
+- Don't load ActionController::Live before initialization by @ajaynomics in [#3109](https://github.com/getsentry/sentry-ruby/pull/3109)
+- Ignore error-less ActiveJob retry enqueues by @solnic in [#3125](https://github.com/getsentry/sentry-ruby/pull/3125)
+
+#### Transport
+
+- Log directly sent envelopes in DebugTransport by @solnic in [#3113](https://github.com/getsentry/sentry-ruby/pull/3113)
+- Make DummyTransport thread-safe by @solnic in [#3112](https://github.com/getsentry/sentry-ruby/pull/3112)
+
+#### Other
+
+- (data-collection) Use frame_context_lines in stacktrace builder by @sl0thentr0py with @sentry-junior in [#3158](https://github.com/getsentry/sentry-ruby/pull/3158)
+- (sidekiq) Start a new trace for each sidekiq-scheduler enqueue by @sl0thentr0py with @sentry-junior in [#3159](https://github.com/getsentry/sentry-ruby/pull/3159)
+- Https support spotlight transport by @sandstrom and @Copilot in [#3136](https://github.com/getsentry/sentry-ruby/pull/3136)
+- Keep StreamingReporter#log_error private by @sean0407 and @codex in [#3150](https://github.com/getsentry/sentry-ruby/pull/3150)
+
+### Internal Changes 🔧
+
+- (crons) Add Fugit schedule conversion helper by @wedamija and @claude in [#3141](https://github.com/getsentry/sentry-ruby/pull/3141)
+- Remove ruby.compile from mise and use gcc 13 by @sl0thentr0py in [#3149](https://github.com/getsentry/sentry-ruby/pull/3149)
+
+## 7.1.0
+
+### Breaking Changes 🛠
+
+- Disable Rails Structured Logging by default. by @sl0thentr0py in [#3102](https://github.com/getsentry/sentry-ruby/pull/3102)
+
+  Since `enable_logs` was removed in [7.0.0](https://github.com/getsentry/sentry-ruby/releases/tag/7.0.0) and the community did not like the automatic enabling of Rails Structured Logging, we are disabling it in this minor.  
+  We apologize for the confusion caused. If you want to turn it on, please use:
+
+  ```ruby
+  Sentry.init do |config|
+    # ...
+    config.rails.structured_logging.enabled = true
+  end
+  ```
+- fix!(tracing): Remove 302/303 from default `trace_ignore_status_codes` by @sl0thentr0py in [#3103](https://github.com/getsentry/sentry-ruby/pull/3103)
+
+### New Features ✨
+
+- (metrics) Attribute integration-emitted metrics by @sentry-junior in [#3071](https://github.com/getsentry/sentry-ruby/pull/3071)
+- The SDK now wraps user callbacks so that they don't unintentionally break your application if they raise inside the callback. by @sl0thentr0py in [#3077](https://github.com/getsentry/sentry-ruby/pull/3077)
+
+  | Callback | Behavior |
+  | --- | --- |
+  | `before_send` | Return `nil` and drop the event |
+  | `before_send_transaction` | Return `nil` and drop the transaction |
+  | `before_send_check_in` | Return `nil` and drop the check-in |
+  | `event_processor` | Return `nil` and drop the event |
+  | `before_send_log` | Return `nil` and drop the log item |
+  | `before_send_metric` | Return `nil` and drop the metric item |
+  | `before_breadcrumb` | Return `nil` and drop the breadcrumb |
+  | `traces_sampler` | Fall back to `traces_sample_rate` |
+  | `backtrace_cleanup_callback` | Fall back to the original backtrace |
+  | `std_lib_logger_filter` | Return `nil` and skip the log |
+
+### Bug Fixes 🐛
+
+#### Logs, Metrics
+
+- Make ThreadedPeriodicWorker and TelemetryEventBuffer fork friendly by @sl0thentr0py in [#3097](https://github.com/getsentry/sentry-ruby/pull/3097)
+- Reduce mutex surface area for TelemetryEventBuffer by @sl0thentr0py in [#3083](https://github.com/getsentry/sentry-ruby/pull/3083)
+- Kill telemetry buffer threads on close by @sl0thentr0py in [#3094](https://github.com/getsentry/sentry-ruby/pull/3094)
+- Ensure TelemetryBuffer uses own thread for both size based and periodic flushing by @sl0thentr0py in [#3084](https://github.com/getsentry/sentry-ruby/pull/3084)
+
+#### Other
+
+- (faraday) Don't double instrument builder by @sl0thentr0py in [#3082](https://github.com/getsentry/sentry-ruby/pull/3082)
+- (rails) Read query params safely in around_action by @sl0thentr0py in [#3106](https://github.com/getsentry/sentry-ruby/pull/3106)
+
 ## 7.0.0
 
 ### Breaking Changes 🛠
@@ -7,7 +89,7 @@
   Using `sentry-rails` will automatically turn on automatic structured logging from Rails. if you want to turn it off, use:
 
   ```ruby
-  Sentry.init do |config
+  Sentry.init do |config|
     # ...
     config.rails.structured_logging.enabled = false
   end

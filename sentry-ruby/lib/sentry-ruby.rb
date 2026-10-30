@@ -10,6 +10,7 @@ require "sentry/core_ext/object/deep_dup"
 require "sentry/utils/argument_checking_helper"
 require "sentry/utils/encoding_helper"
 require "sentry/utils/logging_helper"
+require "sentry/utils/callback_helper"
 require "sentry/utils/sample_rand"
 require "sentry/configuration"
 require "sentry/structured_logger"
@@ -26,6 +27,8 @@ require "sentry/threaded_periodic_worker"
 require "sentry/session_flusher"
 require "sentry/backpressure_monitor"
 require "sentry/cron/monitor_check_ins"
+require "sentry/cron/fugit_schedule"
+require "sentry/cron/slug"
 require "sentry/vernier/profiler"
 require "sentry/metrics"
 
@@ -300,6 +303,8 @@ module Sentry
       if client = get_current_client
         client.configuration.run_after_close_callbacks
         client.flush
+        client.log_event_buffer.kill
+        client.metric_event_buffer.kill
 
         if client.configuration.data_collection.collect_stack_frame_variables?
           exception_locals_tp.disable
@@ -790,3 +795,4 @@ require "sentry/graphql"
 require "sentry/faraday"
 require "sentry/excon"
 require "sentry/std_lib_logger"
+require "sentry/rufus_scheduler"
